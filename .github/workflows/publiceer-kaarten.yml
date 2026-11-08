@@ -5,7 +5,7 @@ on:
   schedule:
     # Vaste Nederlandse tijd, zomer en winter, na de ochtend- en middagscan.
     # GitHub kan ingeplande taken vertraagd starten of incidenteel overslaan.
-    - cron: '41 6,10,14,18,20 * * *'
+    - cron: '31 6,10,14,18,21 * * *'
       timezone: 'Europe/Amsterdam'
 
 permissions:
