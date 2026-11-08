@@ -1,0 +1,13 @@
+RICOWEER - twee automatisch bijgewerkte afbeeldingen voor WordPress.com Free
+
+1. Morgen:
+https://dcschroder-alt.github.io/ricoweer-kaarten/morgen.png
+
+2. Overmorgen:
+https://dcschroder-alt.github.io/ricoweer-kaarten/overmorgen.png
+
+Let op: deze URL's werken pas NA het installeren van het pakket, activeren van
+GitHub Pages in de nieuwe repository en een GESLAAGDE eerste Actions-run.
+
+WordPress: twee gewone Afbeelding-blokken, elk 'Invoegen vanaf URL'.
+NIET uploaden naar de mediabibliotheek (dat zou een statische kopie zijn).

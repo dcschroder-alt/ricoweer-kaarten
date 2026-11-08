@@ -1,0 +1,20 @@
+RICOWEER - Automatische WordPress-afbeeldingen (MORGEN + OVERMORGEN)
+
+1. Het originele Ricoweer blijft in je bestaande Regioweer-repository.
+2. Controleer dat deze bronpagina werkt:
+   https://dcschroder-alt.github.io/Regioweer/weerkaart.html
+3. Maak een aparte publieke GitHub-repository: ricoweer-kaarten
+4. Upload de inhoud van deze ZIP naar de ROOT van die nieuwe repository.
+   Controleer of .github/workflows/publiceer-kaarten.yml is geupload.
+5. Instellingen nieuwe repo -> Settings -> Pages -> Source: GitHub Actions.
+6. Nieuwe repo -> Actions -> 'Ricoweer - twee kaarten voor WordPress'
+   -> Run workflow. Controleer of die geslaagd is.
+7. Plaats in WordPress twee Afbeelding-blokken, INVOEGEN VANAF URL:
+   https://dcschroder-alt.github.io/ricoweer-kaarten/morgen.png
+   https://dcschroder-alt.github.io/ricoweer-kaarten/overmorgen.png
+
+Publicatie wordt volgens schema in Nederland rond 06:41, 10:41, 14:41
+bijgewerkt, mits GitHub Actions en de weergegevens beschikbaar zijn.
+LET OP: de originele openbare GitHub-repository wordt hierdoor niet privé.
+
+Lees README.md voor details, foutafhandeling en tips.
