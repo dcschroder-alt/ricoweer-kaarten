@@ -10,6 +10,7 @@ het script voordat GitHub Pages de twee bestaande PNG's kan vervangen.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 from pathlib import Path
@@ -300,6 +301,42 @@ async def make_images() -> None:
             if compact_file.stat().st_size<12000:
                 raise RuntimeError('Randstad 5-daagse PNG lijkt leeg; publicatie gestopt.')
             print(f'Compacte Randstad-5-daagse gemaakt: {compact_file.name} ({compact_file.stat().st_size} bytes)',flush=True)
+            # V101.0: publiceer ook de volledige Randstad 10-daagse uit DEZELFDE
+            # landelijke scan als de widget. Geen tweede ophaalronde, geen andere
+            # modelrun en geen terugval op niet-regionale Houten-daggegevens.
+            regional = await widget_page.evaluate("""async () => {
+              if(typeof drawRandstadCardsPng!=='function')
+                throw new Error('De Randstad-PNG-functie ontbreekt');
+              const picture=await drawRandstadCardsPng({strict:true,returnDataUrl:true});
+              const safeNumber=v=>v==null||v===''||v==='null'||v==='undefined'?null:Number(v);
+              const compact=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')].map(el=>({
+                date:el.dataset.date,max:safeNumber(el.dataset.max),min:safeNumber(el.dataset.min),
+                rain:safeNumber(el.dataset.rain),sun:safeNumber(el.dataset.sun),
+                wind:safeNumber(el.dataset.wind),type:el.dataset.type
+              }));
+              const scanAt=document.getElementById('ricoWidgetFacts')?.dataset.scanSavedAt;
+              const latest=JSON.parse(localStorage.getItem('rico-national-scan-v75-35punten')||'null')?.savedAt;
+              if(String(latest)!==String(scanAt))throw new Error('De modelscan veranderde tijdens de PNG-export.');
+              return {picture,compact,scanAt};
+            }""")
+            big = regional['picture']
+            compact = regional['compact']
+            if len(big['rows']) != 10 or len(compact) != 5:
+                raise RuntimeError('Randstadkaart en widget hebben niet het juiste aantal dagen.')
+            def near(a,b):
+                if a is None or b is None: return a is b
+                return abs(float(a)-float(b)) < 0.000001
+            for a,b in zip(big['rows'][:5],compact):
+                for field in ('date','max','min','rain','sun','wind','type'):
+                    if not (near(a.get(field),b.get(field)) if field not in ('date','type') else a.get(field)==b.get(field)):
+                        raise RuntimeError(f'Randstadkaart en widget verschillen op {a.get("date")} veld {field}: {a.get(field)} vs {b.get(field)}.')
+            if not str(big['dataUrl']).startswith('data:image/png;base64,'):
+                raise RuntimeError('De Randstad 10-daagse leverde geen geldige PNG.')
+            big_bytes = base64.b64decode(big['dataUrl'].split(',',1)[1], validate=True)
+            if len(big_bytes) < 50000:
+                raise RuntimeError('De volledige Randstad-PNG lijkt leeg.')
+            (OUT/'randstad-10dagen.png').write_bytes(big_bytes)
+            print(f'Randstad 10-daagse uit dezelfde scan: {len(big_bytes)} bytes, scan {regional["scanAt"]}',flush=True)
             # Een simpele startpagina is vereist voor GitHub Pages. Deze bevat
             # uitsluitend de twee publiek getoonde afbeeldingen, geen link
             # naar de Ricoweer-app, broncode, caches of model-API's.
@@ -312,10 +349,10 @@ async def make_images() -> None:
 <p>De kaarten worden meerdere keren per dag automatisch bijgewerkt.</p>
 <img src="morgen.png" alt="Landelijke weersverwachting voor morgen">
 <img src="overmorgen.png" alt="Landelijke weersverwachting voor overmorgen">
-<h2>Randstad · vijf dagen (compact)</h2><img src="randstad-5dagen.png" alt="Vijfdaagse weersverwachting voor de Randstad"><h2>Morgenkaart met vijfdaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
+<h2>Randstad · 10 dagen (zelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · vijf dagen (compact)</h2><img src="randstad-5dagen.png" alt="Vijfdaagse weersverwachting voor de Randstad"><h2>Morgenkaart met vijfdaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
 </body></html>"""
             (OUT / 'index.html').write_text(landing, encoding='utf-8')
-            print("Succes: morgen.png, overmorgen.png, widget.png en randstad-5dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
+            print("Succes: morgen.png, overmorgen.png, widget.png, randstad-5dagen.png en randstad-10dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
         finally:
             await browser.close()
 
