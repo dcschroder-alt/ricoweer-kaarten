@@ -97,6 +97,19 @@ VALIDATED_JS = """({cacheKey, dates, maxAge, minPts}) => {
  return cards.length === 2 && cards.every(c => c.querySelectorAll('.ricoWeatherPin').length >= 8);
 }"""
 
+WIDGET_VALIDATED_JS = """({cacheKey, date, maxAge, minPts}) => {
+ let pack;
+ try {pack=JSON.parse(localStorage.getItem(cacheKey)||'null')} catch(e){return false}
+ if(!pack||!Array.isArray(pack.models)||pack.models.length<2||!Array.isArray(pack.days))return false;
+ if(Date.now()-Number(pack.savedAt||0)>maxAge)return false;
+ const day=pack.days.find(x=>x.date===date);
+ if(!day||day.pts.filter(p=>Number.isFinite(p.tx)&&Number.isFinite(p.tn)).length<minPts)return false;
+ const card=document.querySelector('#ricoLiveShell #ricoWeatherAtlas .ricoWeatherGrid > .ricoWeatherCard:first-child');
+ const facts=document.querySelectorAll('#ricoWidgetFacts .ricoWidgetFact');
+ return !!card&&card.querySelectorAll('.ricoWeatherPin').length>=7 && facts.length===4 &&
+        document.querySelector('.ricoWidgetMode')!==null;
+}"""
+
 DEBUG_JS = """key => {
  let pack; try {pack=JSON.parse(localStorage.getItem(key)||'null')}catch(e){}
  return {
@@ -235,6 +248,42 @@ async def make_images() -> None:
                 if destination.stat().st_size < 65000:
                     raise RuntimeError(f"PNG {filename} lijkt leeg.")
                 print(f"PNG gemaakt: {destination.name} ({destination.stat().st_size} bytes)", flush=True)
+            # Extra WordPress-zijbalkkaart. Daggegevens komen uit exact dezelfde
+            # landelijke modelmix; geen dagmaxima uit uurverwachtingen afleiden.
+            # Ook dit bestand pas publiceerbaar maken na inhoudelijke/visuele controle.
+            from urllib.parse import urlparse, urlunparse
+            source_parts=urlparse(SOURCE)
+            if not source_parts.path.endswith('/weerkaart.html'):
+                raise RuntimeError('SOURCE_MAP_URL moet eindigen op /weerkaart.html')
+            widget_source=urlunparse(source_parts._replace(
+                path=source_parts.path[:-len('weerkaart.html')]+'widgetkaart.html',
+                query=f'publicatie={int(datetime.now().timestamp()*1000)}'))
+            widget_page=await context.new_page()
+            widget_response=await widget_page.goto(widget_source, wait_until='domcontentloaded',timeout=55000)
+            if not widget_response or not widget_response.ok:
+                raise RuntimeError(f'Compacte bronpagina widgetkaart.html niet bereikbaar ({widget_response.status if widget_response else "geen reactie"}).')
+            try:
+                await widget_page.wait_for_function(WIDGET_VALIDATED_JS,
+                    arg={'cacheKey':SCAN_KEY,'date':expected[0],'maxAge':MAX_AGE_MS,'minPts':MIN_POINTS},
+                    timeout=MAX_WAIT_MS,polling=1300)
+            except PlaywrightTimeoutError as exc:
+                debug=await widget_page.evaluate(DEBUG_JS,SCAN_KEY)
+                print('Widgetdiagnose:',json.dumps(debug,ensure_ascii=False),flush=True)
+                raise RuntimeError('Widgetpagina heeft onvoldoende actuele dagmodelmix of kaartpunten.') from exc
+            widget=widget_page.locator('#ricoLiveShell')
+            await widget.scroll_into_view_if_needed()
+            await widget_page.wait_for_timeout(1600)
+            quality=await widget.locator('.ricoWeatherCard:first-child').evaluate(QUALITY_JS)
+            facts=await widget_page.locator('#ricoWidgetFacts .ricoWidgetFact').count()
+            size=await widget.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
+            print('WordPress-zijbalkkaart:',quality,'facts:',facts,'grootte:',size,flush=True)
+            if quality['tiles']<7 or quality['pins']<7 or quality['width']<430 or quality['height']<560 or facts!=4 or size['w']<450:
+                raise RuntimeError('De widget is onvolledig; huidige gepubliceerde afbeeldingen blijven behouden.')
+            widget_destination=OUT/'widget.png'
+            await widget.screenshot(path=str(widget_destination),type='png',animations='disabled',timeout=50000)
+            if widget_destination.stat().st_size<45000:
+                raise RuntimeError('Widget-PNG lijkt leeg; publicatie gestopt.')
+            print(f'Widget gemaakt: {widget_destination.name} ({widget_destination.stat().st_size} bytes)',flush=True)
             # Een simpele startpagina is vereist voor GitHub Pages. Deze bevat
             # uitsluitend de twee publiek getoonde afbeeldingen, geen link
             # naar de Ricoweer-app, broncode, caches of model-API's.
@@ -247,9 +296,10 @@ async def make_images() -> None:
 <p>De kaarten worden meerdere keren per dag automatisch bijgewerkt.</p>
 <img src="morgen.png" alt="Landelijke weersverwachting voor morgen">
 <img src="overmorgen.png" alt="Landelijke weersverwachting voor overmorgen">
+<h2>Compacte WordPress-widget</h2><img src="widget.png" alt="Compacte weerkaart voor de WordPress-zijbalk">
 </body></html>"""
             (OUT / 'index.html').write_text(landing, encoding='utf-8')
-            print("Succes: de twee PNG's en een afbeelding-only startpagina kunnen worden gepubliceerd.", flush=True)
+            print("Succes: morgen.png, overmorgen.png en widget.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
         finally:
             await browser.close()
 
