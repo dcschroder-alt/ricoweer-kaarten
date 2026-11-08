@@ -105,8 +105,11 @@ WIDGET_VALIDATED_JS = """({cacheKey, date, maxAge, minPts}) => {
  const day=pack.days.find(x=>x.date===date);
  if(!day||day.pts.filter(p=>Number.isFinite(p.tx)&&Number.isFinite(p.tn)).length<minPts)return false;
  const card=document.querySelector('#ricoLiveShell #ricoWeatherAtlas .ricoWeatherGrid > .ricoWeatherCard:first-child');
- const facts=document.querySelectorAll('#ricoWidgetFacts .ricoWidgetFact');
- return !!card&&card.querySelectorAll('.ricoWeatherPin').length>=7 && facts.length===4 &&
+ const rows=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')];
+ const dates=Array.from({length:5},(_,i)=>new Date(Date.parse(date+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
+ return !!card&&card.querySelectorAll('.ricoWeatherPin').length>=7 &&
+        rows.length===5 && rows.every((r,i)=>r.dataset.date===dates[i]) &&
+        !!document.querySelector('#ricoWidgetFacts .rico5DaySummary') &&
         document.querySelector('.ricoWidgetMode')!==null;
 }"""
 
@@ -248,7 +251,7 @@ async def make_images() -> None:
                 if destination.stat().st_size < 65000:
                     raise RuntimeError(f"PNG {filename} lijkt leeg.")
                 print(f"PNG gemaakt: {destination.name} ({destination.stat().st_size} bytes)", flush=True)
-            # Extra WordPress-zijbalkkaart. Daggegevens komen uit exact dezelfde
+            # Extra WordPress-zijbalkkaart met vijfdaagse Randstadverwachting. Daggegevens komen uit exact dezelfde
             # landelijke modelmix; geen dagmaxima uit uurverwachtingen afleiden.
             # Ook dit bestand pas publiceerbaar maken na inhoudelijke/visuele controle.
             from urllib.parse import urlparse, urlunparse
@@ -274,16 +277,29 @@ async def make_images() -> None:
             await widget.scroll_into_view_if_needed()
             await widget_page.wait_for_timeout(1600)
             quality=await widget.locator('.ricoWeatherCard:first-child').evaluate(QUALITY_JS)
-            facts=await widget_page.locator('#ricoWidgetFacts .ricoWidgetFact').count()
+            facts=await widget_page.locator('#ricoWidgetFacts .rico5DayRow').count()
             size=await widget.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
             print('WordPress-zijbalkkaart:',quality,'facts:',facts,'grootte:',size,flush=True)
-            if quality['tiles']<7 or quality['pins']<7 or quality['width']<430 or quality['height']<560 or facts!=4 or size['w']<450:
+            if quality['tiles']<7 or quality['pins']<7 or quality['width']<430 or quality['height']<560 or facts!=5 or size['w']<450:
                 raise RuntimeError('De widget is onvolledig; huidige gepubliceerde afbeeldingen blijven behouden.')
             widget_destination=OUT/'widget.png'
             await widget.screenshot(path=str(widget_destination),type='png',animations='disabled',timeout=50000)
             if widget_destination.stat().st_size<45000:
-                raise RuntimeError('Widget-PNG lijkt leeg; publicatie gestopt.')
+                raise RuntimeError('Vijfdaagse Randstad-widget PNG lijkt leeg; publicatie gestopt.')
             print(f'Widget gemaakt: {widget_destination.name} ({widget_destination.stat().st_size} bytes)',flush=True)
+            # Extra compacte vijfdaagse zonder de grote landkaart. Deze versie past
+            # in de smalle WordPress-widgetbalk. Exact dezelfde regionale dagmix.
+            forecast=widget_page.locator('#ricoWidgetFacts')
+            if await forecast.locator('.rico5DayRow').count()!=5:
+                raise RuntimeError('Randstad 5-daagse onvolledig: publicatie gestopt.')
+            forecast_size=await forecast.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
+            if forecast_size['w']<400 or forecast_size['h']<250:
+                raise RuntimeError('Randstad overzicht te klein; publicatie gestopt: '+str(forecast_size))
+            compact_file=OUT/'randstad-5dagen.png'
+            await forecast.screenshot(path=str(compact_file),type='png',animations='disabled',timeout=50000)
+            if compact_file.stat().st_size<12000:
+                raise RuntimeError('Randstad 5-daagse PNG lijkt leeg; publicatie gestopt.')
+            print(f'Compacte Randstad-5-daagse gemaakt: {compact_file.name} ({compact_file.stat().st_size} bytes)',flush=True)
             # Een simpele startpagina is vereist voor GitHub Pages. Deze bevat
             # uitsluitend de twee publiek getoonde afbeeldingen, geen link
             # naar de Ricoweer-app, broncode, caches of model-API's.
@@ -296,10 +312,10 @@ async def make_images() -> None:
 <p>De kaarten worden meerdere keren per dag automatisch bijgewerkt.</p>
 <img src="morgen.png" alt="Landelijke weersverwachting voor morgen">
 <img src="overmorgen.png" alt="Landelijke weersverwachting voor overmorgen">
-<h2>Compacte WordPress-widget</h2><img src="widget.png" alt="Compacte weerkaart voor de WordPress-zijbalk">
+<h2>Randstad · vijf dagen (compact)</h2><img src="randstad-5dagen.png" alt="Vijfdaagse weersverwachting voor de Randstad"><h2>Morgenkaart met vijfdaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
 </body></html>"""
             (OUT / 'index.html').write_text(landing, encoding='utf-8')
-            print("Succes: morgen.png, overmorgen.png en widget.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
+            print("Succes: morgen.png, overmorgen.png, widget.png en randstad-5dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
         finally:
             await browser.close()
 
