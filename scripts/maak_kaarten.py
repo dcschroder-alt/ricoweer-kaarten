@@ -137,6 +137,45 @@ async def make_images() -> None:
                 SCAN_KEY,
             )
             print("Gecontroleerde landelijke modelmix:", json.dumps(info, ensure_ascii=False), flush=True)
+            # De openbare kaartpagina heeft standaard TWEE kaarten naast elkaar.
+            # Op een headless browser van 1140 px worden die elk ~511 px breed.
+            # Zet uitsluitend voor de PNG-export de kaartpanelen ONDER elkaar;
+            # zo blijft de hoge-resolutiekaart breed genoeg zonder controles te verlagen.
+            layout = await page.evaluate("""() => {
+                const shell = document.querySelector('#ricoLiveShell');
+                const atlas = shell?.querySelector('#ricoWeatherAtlas');
+                const grid = atlas?.querySelector('.ricoWeatherGrid');
+                if (!shell || !atlas || !grid) return {error:'Live kaartlayout ontbreekt'};
+                const important = (el, key, value) => el.style.setProperty(key, value, 'important');
+                important(shell, 'width', '1060px');
+                important(shell, 'max-width', '1060px');
+                important(atlas, 'width', '100%');
+                important(grid, 'display', 'grid');
+                important(grid, 'grid-template-columns', 'minmax(0, 1fr)');
+                important(grid, 'width', '100%');
+                important(grid, 'max-width', '1000px');
+                important(grid, 'margin-left', 'auto');
+                important(grid, 'margin-right', 'auto');
+                for (const card of grid.querySelectorAll(':scope > .ricoWeatherCard')) {
+                    important(card, 'width', '100%');
+                    important(card, 'min-width', '0');
+                    const map = card.querySelector('.ricoWeatherMap');
+                    if (map) {
+                        important(map, 'width', '100%');
+                        important(map, 'height', '1030px');
+                        important(map, 'min-height', '1030px');
+                        important(map, 'max-height', 'none');
+                    }
+                }
+                return {
+                    gridWidth: Math.round(grid.getBoundingClientRect().width),
+                    cardWidths: [...grid.querySelectorAll(':scope > .ricoWeatherCard')].map(c => Math.round(c.getBoundingClientRect().width)),
+                    layout: getComputedStyle(grid).gridTemplateColumns
+                };
+            }""")
+            print("Export-layout:", layout, flush=True)
+            if layout.get('error') or min(layout.get('cardWidths', [0])) < 700:
+                raise RuntimeError('Export-layout kon niet breed genoeg worden gemaakt: ' + str(layout))
             await page.evaluate("""() => {
                 window.dispatchEvent(new Event('resize'));
                 for(const el of document.querySelectorAll('#ricoLiveShell .ricoWeatherMap'))
