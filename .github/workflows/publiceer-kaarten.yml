@@ -5,7 +5,7 @@ on:
   schedule:
     # Vaste Nederlandse tijd, zomer en winter, na de ochtend- en middagscan.
     # GitHub kan ingeplande taken vertraagd starten of incidenteel overslaan.
-    - cron: '41 6,10,14 * * *'
+    - cron: '41 6,10,14,18,20 * * *'
       timezone: 'Europe/Amsterdam'
 
 permissions:
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   publiceer:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 18
     environment:
       name: github-pages
