@@ -41,9 +41,39 @@ EXPORT_CSS = """
 #ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherTitle {
  display:flex!important; justify-content:space-between!important;
  padding:16px 20px!important; background:#e7f3fb!important;
- color:#064b71!important; font-size:23px!important; line-height:1.3!important;
+ color:#064b71!important; font-size:27px!important; line-height:1.3!important;
 }
 #ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherTitle span:last-child {display:none!important}
+/* Alleen de gepubliceerde PNG's: kaartlabels leesbaar bij verkleinen in WordPress.
+   De live Ricoweer-app, datamodellen en de kaartselectie veranderen niet. */
+#ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherPin.rico82Pin {
+ width:98px!important; height:98px!important; margin-left:-8px!important;
+ transform:translateY(-8px); overflow:visible!important;
+}
+#ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherPin.rico82Pin .ricoWeatherSymbol {
+ display:flex!important; flex:0 0 48px!important; height:48px!important;
+ line-height:48px!important; align-items:center!important; justify-content:center!important;
+}
+#ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherPin.rico82Pin .ricoUnifiedWeatherSvg {
+ width:49px!important; height:49px!important; max-width:none!important;
+}
+#ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherPin.rico82Pin .ricoWeatherTemp {
+ font-size:23px!important; line-height:1.08!important; font-weight:950!important;
+ padding:4px 7px!important; border:2px solid white!important;
+ border-radius:16px!important; gap:3px!important; flex-shrink:0!important;
+ text-shadow:0 0 1px #153e4b22;
+}
+#ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherPin.rico82Pin .ricoWeatherTemp .ricoSep {
+ font-size:18px!important;
+}
+#ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherPin.rico82Pin .ricoDailyWind {
+ font-size:15px!important; line-height:20px!important; padding:3px 7px!important;
+ margin-top:3px!important; max-width:none!important; flex-shrink:0!important;
+ border-radius:12px!important;
+}
+#ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherPin.rico82Pin .ricoDailyWind .ricoWeatherWindArrow {
+ font-size:18px!important;
+}
 #ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .leaflet-control-zoom {display:none!important}
 #ricoLiveShell #ricoWeatherAtlas.ricoLiveAtlas .ricoWeatherMap::after {
  content:'Kaart © OpenStreetMap-bijdragers'; position:absolute; bottom:5px; right:6px;
@@ -137,6 +167,9 @@ async def make_images() -> None:
                 SCAN_KEY,
             )
             print("Gecontroleerde landelijke modelmix:", json.dumps(info, ensure_ascii=False), flush=True)
+            # We vergroten bij de PNG-export ook de labels, omdat WordPress
+            # de 1000px brede kaart op mobiele schermen verkleint. CSS geldt
+            # alleen op deze headless exportpagina, niet in Ricoweer zelf.
             # De openbare kaartpagina heeft standaard TWEE kaarten naast elkaar.
             # Op een headless browser van 1140 px worden die elk ~511 px breed.
             # Zet uitsluitend voor de PNG-export de kaartpanelen ONDER elkaar;
