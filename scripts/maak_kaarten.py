@@ -107,9 +107,9 @@ WIDGET_VALIDATED_JS = """({cacheKey, date, maxAge, minPts}) => {
  if(!day||day.pts.filter(p=>Number.isFinite(p.tx)&&Number.isFinite(p.tn)).length<minPts)return false;
  const card=document.querySelector('#ricoLiveShell #ricoWeatherAtlas .ricoWeatherGrid > .ricoWeatherCard:first-child');
  const rows=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')];
- const dates=Array.from({length:5},(_,i)=>new Date(Date.parse(date+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
+ const dates=Array.from({length:10},(_,i)=>new Date(Date.parse(date+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
  return !!card&&card.querySelectorAll('.ricoWeatherPin').length>=7 &&
-        rows.length===5 && rows.every((r,i)=>r.dataset.date===dates[i]) &&
+        rows.length===10 && rows.every((r,i)=>r.dataset.date===dates[i]) &&
         !!document.querySelector('#ricoWidgetFacts .rico5DaySummary') &&
         document.querySelector('.ricoWidgetMode')!==null;
 }"""
@@ -281,26 +281,28 @@ async def make_images() -> None:
             facts=await widget_page.locator('#ricoWidgetFacts .rico5DayRow').count()
             size=await widget.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
             print('WordPress-zijbalkkaart:',quality,'facts:',facts,'grootte:',size,flush=True)
-            if quality['tiles']<7 or quality['pins']<7 or quality['width']<430 or quality['height']<560 or facts!=5 or size['w']<450:
+            if quality['tiles']<7 or quality['pins']<7 or quality['width']<430 or quality['height']<560 or facts!=10 or size['w']<450:
                 raise RuntimeError('De widget is onvolledig; huidige gepubliceerde afbeeldingen blijven behouden.')
             widget_destination=OUT/'widget.png'
             await widget.screenshot(path=str(widget_destination),type='png',animations='disabled',timeout=50000)
             if widget_destination.stat().st_size<45000:
                 raise RuntimeError('Vijfdaagse Randstad-widget PNG lijkt leeg; publicatie gestopt.')
             print(f'Widget gemaakt: {widget_destination.name} ({widget_destination.stat().st_size} bytes)',flush=True)
-            # Extra compacte vijfdaagse zonder de grote landkaart. Deze versie past
+            # Extra compacte tiendaagse zonder de grote landkaart. Deze versie past
             # in de smalle WordPress-widgetbalk. Exact dezelfde regionale dagmix.
             forecast=widget_page.locator('#ricoWidgetFacts')
-            if await forecast.locator('.rico5DayRow').count()!=5:
-                raise RuntimeError('Randstad 5-daagse onvolledig: publicatie gestopt.')
+            if await forecast.locator('.rico5DayRow').count()!=10:
+                raise RuntimeError('Randstad 10-daagse onvolledig: publicatie gestopt.')
             forecast_size=await forecast.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
             if forecast_size['w']<400 or forecast_size['h']<250:
                 raise RuntimeError('Randstad overzicht te klein; publicatie gestopt: '+str(forecast_size))
             compact_file=OUT/'randstad-5dagen.png'
             await forecast.screenshot(path=str(compact_file),type='png',animations='disabled',timeout=50000)
             if compact_file.stat().st_size<12000:
-                raise RuntimeError('Randstad 5-daagse PNG lijkt leeg; publicatie gestopt.')
-            print(f'Compacte Randstad-5-daagse gemaakt: {compact_file.name} ({compact_file.stat().st_size} bytes)',flush=True)
+                raise RuntimeError('Randstad 10-daagse PNG lijkt leeg; publicatie gestopt.')
+            # Ook een logisch benoemde URL; de bestaande WordPress-afbeelding blijft werken.
+            (OUT/'randstad-10dagen-compact.png').write_bytes(compact_file.read_bytes())
+            print(f'Compacte Randstad-10-daagse gemaakt: {compact_file.name} ({compact_file.stat().st_size} bytes)',flush=True)
             # V101.0: publiceer ook de volledige Randstad 10-daagse uit DEZELFDE
             # landelijke scan als de widget. Geen tweede ophaalronde, geen andere
             # modelrun en geen terugval op niet-regionale Houten-daggegevens.
@@ -321,12 +323,12 @@ async def make_images() -> None:
             }""")
             big = regional['picture']
             compact = regional['compact']
-            if len(big['rows']) != 10 or len(compact) != 5:
+            if len(big['rows']) != 10 or len(compact) != 10:
                 raise RuntimeError('Randstadkaart en widget hebben niet het juiste aantal dagen.')
             def near(a,b):
                 if a is None or b is None: return a is b
                 return abs(float(a)-float(b)) < 0.000001
-            for a,b in zip(big['rows'][:5],compact):
+            for a,b in zip(big['rows'],compact):
                 for field in ('date','max','min','rain','sun','wind','type'):
                     if not (near(a.get(field),b.get(field)) if field not in ('date','type') else a.get(field)==b.get(field)):
                         raise RuntimeError(f'Randstadkaart en widget verschillen op {a.get("date")} veld {field}: {a.get(field)} vs {b.get(field)}.')
@@ -349,10 +351,10 @@ async def make_images() -> None:
 <p>De kaarten worden meerdere keren per dag automatisch bijgewerkt.</p>
 <img src="morgen.png" alt="Landelijke weersverwachting voor morgen">
 <img src="overmorgen.png" alt="Landelijke weersverwachting voor overmorgen">
-<h2>Randstad · 10 dagen (zelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · vijf dagen (compact)</h2><img src="randstad-5dagen.png" alt="Vijfdaagse weersverwachting voor de Randstad"><h2>Morgenkaart met vijfdaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
+<h2>Randstad · 10 dagen (zelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · tien dagen (compact)</h2><img src="randstad-10dagen-compact.png" alt="Tiendaagse weersverwachting voor de Randstad"><h2>Morgenkaart met tiendaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
 </body></html>"""
             (OUT / 'index.html').write_text(landing, encoding='utf-8')
-            print("Succes: morgen.png, overmorgen.png, widget.png, randstad-5dagen.png en randstad-10dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
+            print("Succes: morgen.png, overmorgen.png, widget.png, randstad-5dagen.png (10 dagen, bestaande URL), randstad-10dagen-compact.png en randstad-10dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
         finally:
             await browser.close()
 
