@@ -3,9 +3,9 @@ name: Ricoweer - twee kaarten voor WordPress
 on:
   workflow_dispatch:
   schedule:
-    # Vaste Nederlandse tijd, zomer en winter, na de ochtend- en middagscan.
-    # GitHub kan ingeplande taken vertraagd starten of incidenteel overslaan.
-    - cron: '00 1,5,8,11,14,16,18,21 * * *'
+    # Nederlandse lokale tijd, inclusief automatische zomer-/wintertijd.
+    # Geplande GitHub Actions-runs kunnen vertraagd zijn.
+    - cron: '0 1,5,8,11,14,17,18,21 * * *'
       timezone: 'Europe/Amsterdam'
 
 permissions:
@@ -37,14 +37,14 @@ jobs:
           python -m playwright install chromium
       - name: Controleer exporter
         run: python -m py_compile scripts/maak_kaarten.py
-      - name: Genereer morgen en overmorgen met de Ricoweer-dagmodelmix
+      - name: Genereer kaarten met de Ricoweer-dagmodelmix
         run: python scripts/maak_kaarten.py
         env:
           SOURCE_MAP_URL: https://dcschroder-alt.github.io/Regioweer/weerkaart.html
           OUTPUT_DIR: public
       - name: Configureer GitHub Pages
         uses: actions/configure-pages@v5
-      - name: Upload alleen de twee PNG's
+      - name: Upload de PNG's
         uses: actions/upload-pages-artifact@v4
         with:
           path: public
