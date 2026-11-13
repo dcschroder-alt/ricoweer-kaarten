@@ -331,20 +331,25 @@ async def make_images() -> None:
               const day=d=>new Intl.DateTimeFormat('nl-NL',{weekday:'long',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
               const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
               const rounded=n=>Math.round(n);
+              // Dagtype is leidend: dezelfde categorie als het dagsymbool.
+              // Absolute zonuren zijn GEEN zonpercentage; gebruik ze daarom
+              // niet als losse drempel voor een zonnig symbool.
               const category=r=>{
                 const t=r.type;
                 if(/onweer/.test(t))return 'onweer';
                 if(/sneeuw/.test(t))return 'sneeuw';
                 if(/regenachtig|regen|nat/.test(t))return 'regen';
                 if(/bui/.test(t))return 'buien';
+                if(/vrij zonnig/.test(t))return 'vrijzon';
                 if(/zonnig|veel zon/.test(t))return 'zon';
-                if(/bewolkt|grijs/.test(t))return 'bewolkt';
+                if(/zon en wolken|half bewolkt|wisselend bewolkt/.test(t))return 'zonwolken';
+                if(/veel bewolking|weinig zon/.test(t))return 'veelbewolking';
+                if(/geheel bewolkt|bewolkt|grijs/.test(t))return 'bewolkt';
                 if(/zon/.test(t))return 'zonwolken';
                 if(r.rain!==null&&r.rain>=2)return 'regen';
-                if(r.sun!==null&&r.sun>=5)return 'zon';
                 return 'gemengd';
               };
-              const phrase={onweer:'met kans op onweer',sneeuw:'met kans op sneeuw',regen:'met perioden met regen',buien:'met af en toe buien',zon:'met veel ruimte voor de zon',bewolkt:'met overwegend veel bewolking',zonwolken:'met zon en wolken',gemengd:'met een afwisseling van wolken en opklaringen'};
+              const phrase={onweer:'met kans op onweer',sneeuw:'met kans op sneeuw',regen:'met perioden met regen',buien:'met af en toe buien',zon:'met zonnig en droog weer',bewolkt:'met overwegend veel bewolking',zonwolken:'met zon en wolken',gemengd:'met een afwisseling van wolken en opklaringen'};
               const first=rows.slice(0,5),later=rows.slice(5);
               const hi=arr=>Math.max(...arr.map(r=>r.max));
               const lo=arr=>Math.min(...arr.map(r=>r.max));
@@ -362,7 +367,13 @@ async def make_images() -> None:
               const label=r=>r.date===today?'Vandaag':r.date===tomorrow?'Morgen':cap(day(r.date));
               const weather=r=>{
                 const k=category(r);
-                return ({onweer:'is er kans op onweer',sneeuw:'kan sneeuw vallen',regen:'valt er geregeld regen',buien:'komen enkele buien voor',zon:'schijnt de zon geregeld',bewolkt:'overheerst de bewolking',zonwolken:'wisselen zon en wolken elkaar af',gemengd:'zijn er wolken en opklaringen'})[k];
+                return ({onweer:'is er kans op onweer',sneeuw:'kan sneeuw vallen',
+                  regen:'valt er geregeld regen',buien:'komen enkele buien voor',
+                  zon:'is het zonnig en droog',vrijzon:'schijnt de zon flink',
+                  zonwolken:'wisselen zon en wolken elkaar af',
+                  veelbewolking:'is het vaak bewolkt met soms wat zon',
+                  bewolkt:'blijft het bewolkt',
+                  gemengd:'zijn er wolken en opklaringen'})[k];
               };
               const p1=`${label(a)} ${weather(a)}. Het wordt ongeveer ${rounded(a.max)} graden. ${label(b)} ${weather(b)} en wordt het ${rounded(b.max)} graden.`;
               const rest=rows.slice(2,5);
