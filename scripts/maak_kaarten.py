@@ -387,7 +387,55 @@ async def make_images() -> None:
                         raise RuntimeError(f'Randstadkaart en widget verschillen op {a.get("date")} veld {field}: {a.get(field)} vs {b.get(field)}.')
             if not str(big['dataUrl']).startswith('data:image/png;base64,'):
                 raise RuntimeError('De Randstad 10-daagse leverde geen geldige PNG.')
-            big_bytes = base64.b64decode(big['dataUrl'].split(',',1)[1], validate=True)
+            # Plaats hetzelfde weerbericht ook BOVEN de volledige Randstad-PNG.
+            # Zo toont de bestaande WordPress-URL randstad-10dagen.png de tekst.
+            # Compositie gebeurt lokaal in de browser; geen extra weer-API-calls.
+            combined_url = await widget_page.evaluate(r"""async ({imageUrl, text}) => {
+              const image = new Image();
+              image.src = imageUrl;
+              await image.decode();
+              const width = image.naturalWidth;
+              const scale = width / 1000;
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+              const pad = Math.round(32*scale);
+              const inner = width-2*pad;
+              const lineHeight = Math.round(30*scale);
+              const paragraphs = text.split(/(?<=\.)\s+(?=[A-Z])/); // unused: preserve original text
+              const original = document.getElementById('ricoExportRandstadNarrative');
+              const ptexts = [...(original?.querySelectorAll('p')||[])].map(p=>p.textContent);
+              if(ptexts.length!==3)throw new Error('Weerbericht ontbreekt bij PNG-compositie');
+              ctx.font=`${Math.round(23*scale)}px Arial`;
+              function wrap(str){
+                const result=[];let line='';
+                for(const word of str.split(/\s+/)){
+                  const candidate=line?line+' '+word:word;
+                  if(ctx.measureText(candidate).width>inner && line){result.push(line);line=word;}
+                  else line=candidate;
+                }
+                if(line)result.push(line);
+                return result;
+              }
+              const lines=ptexts.map(wrap);
+              const headingHeight=Math.round(58*scale);
+              const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
+              const topHeight=pad+headingHeight+textHeight+pad;
+              canvas.width=width;canvas.height=topHeight+image.naturalHeight;
+              ctx.fillStyle='#eaf4fa';ctx.fillRect(0,0,width,topHeight);
+              ctx.fillStyle='#07527a';ctx.font=`bold ${Math.round(34*scale)}px Arial`;
+              ctx.fillText('Weerbericht Randstad',pad,pad+Math.round(32*scale));
+              ctx.fillStyle='#17445f';ctx.font=`${Math.round(23*scale)}px Arial`;
+              let y=pad+headingHeight;
+              for(const group of lines){
+                for(const line of group){ctx.fillText(line,pad,y);y+=lineHeight;}
+                y+=Math.round(19*scale);
+              }
+              ctx.drawImage(image,0,topHeight);
+              return canvas.toDataURL('image/png');
+            }""", {'imageUrl':big['dataUrl'],'text':narrative['text']})
+            if not combined_url.startswith('data:image/png;base64,'):
+                raise RuntimeError('Volledige Randstad-PNG met weerbericht is ongeldig.')
+            big_bytes = base64.b64decode(combined_url.split(',',1)[1], validate=True)
             if len(big_bytes) < 50000:
                 raise RuntimeError('De volledige Randstad-PNG lijkt leeg.')
             (OUT/'randstad-10dagen.png').write_bytes(big_bytes)
