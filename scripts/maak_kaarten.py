@@ -23,8 +23,8 @@ OUT = Path(os.environ.get("OUTPUT_DIR", "public")).resolve()
 SCAN_KEY = "rico-national-scan-v75-35punten"
 MIN_POINTS = 12
 MAX_AGE_MS = 4 * 60 * 60 * 1000
-MAX_WAIT_MS = int(os.environ.get("MAX_WAIT_MS", "220000"))
-RETRY_WAIT_MS = int(os.environ.get("RETRY_WAIT_MS", "160000"))
+MAX_WAIT_MS = int(os.environ.get("MAX_WAIT_MS", "110000"))
+RETRY_WAIT_MS = int(os.environ.get("RETRY_WAIT_MS", "70000"))
 
 EXPORT_CSS = """
 #ricoLiveShell {max-width:1060px!important; padding:12px 10px!important}
@@ -583,9 +583,69 @@ async def make_images() -> None:
             await browser.close()
 
 
+
+# Een mislukte bron-API mag niet zorgen dat GitHub Pages een leeg artefact
+# publiceert. Bij een mislukte nieuwe scan hergebruik de *ongewijzigde* reeds
+# gepubliceerde PNG's, mits alle bestanden volledig kunnen worden gecontroleerd.
+# Dit is nadrukkelijk geen nieuwe weersverwachting of EC46-update.
+def restore_previous_publication() -> bool:
+    from urllib.request import Request, urlopen
+    from urllib.parse import urljoin
+    import struct
+
+    base = os.environ.get(
+        "PUBLISHED_PAGES_URL",
+        "https://dcschroder-alt.github.io/ricoweer-kaarten/",
+    ).rstrip("/") + "/"
+    names = (
+        "morgen.png", "overmorgen.png", "widget.png",
+        "randstad-5dagen.png", "randstad-10dagen-compact.png",
+        "randstad-10dagen.png",
+    )
+    collected = {}
+    for name in names:
+        url = urljoin(base, name)
+        try:
+            req = Request(url, headers={"User-Agent": "Ricoweer-Pages-Fallback/1.0", "Cache-Control": "no-cache"})
+            with urlopen(req, timeout=18) as response:
+                data = response.read(12 * 1024 * 1024 + 1)
+            if len(data) < 20000 or len(data) > 12 * 1024 * 1024:
+                raise ValueError("PNG-grootte buiten grenzen")
+            if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+                raise ValueError("Geen geldige PNG-header")
+            width, height = struct.unpack(">II", data[16:24])
+            if width < 350 or height < 250:
+                raise ValueError(f"Onverwachte PNG-afmetingen: {width}x{height}")
+            collected[name] = data
+        except Exception as exc:
+            print(f"Terugval niet mogelijk voor {name}: {exc}", flush=True)
+            return False
+    # Pas na volledige validatie bestanden opslaan. Geen gedeeltelijke set.
+    OUT.mkdir(parents=True, exist_ok=True)
+    for name, data in collected.items():
+        (OUT / name).write_bytes(data)
+    landing = """<!doctype html><html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ricoweer - laatst beschikbare weerkaarten</title>
+<style>body{max-width:920px;margin:20px auto;padding:0 12px;font:16px system-ui,sans-serif;background:#f2f7fb;color:#173b56}img{max-width:100%;height:auto;display:block;margin:16px auto}</style>
+</head><body><h1>Ricoweer - laatst beschikbare weerkaarten</h1>
+<p>De nieuwste brongegevens waren tijdelijk niet beschikbaar. De bestaande kaarten zijn ongewijzigd behouden; de oorspronkelijke updatevermelding in de PNG's blijft leidend.</p>
+<h2>Morgen</h2><img src="morgen.png" alt="Laatst beschikbare morgenkaart">
+<h2>Overmorgen</h2><img src="overmorgen.png" alt="Laatst beschikbare overmorgenkaart">
+<h2>Randstad - 10 dagen</h2><img src="randstad-10dagen.png" alt="Laatst beschikbare Randstadverwachting">
+<h2>Randstad compact</h2><img src="randstad-10dagen-compact.png" alt="Laatst beschikbare compacte Randstadverwachting">
+<h2>Widget</h2><img src="widget.png" alt="Laatst beschikbare widget">
+</body></html>"""
+    (OUT / "index.html").write_text(landing, encoding="utf-8")
+    print("TERUGVAL: bron-API tijdelijk niet beschikbaar; zes eerder gepubliceerde PNG's ongewijzigd hergebruikt. Geen nieuwe update of EC46-gegevens.", flush=True)
+    return True
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(make_images())
     except Exception as error:
-        print(f"PUBLICATIE OVERGESLAGEN: {error}", flush=True)
-        raise SystemExit(1)
+        print(f"Nieuwe publicatie mislukt: {error}", flush=True)
+        if not restore_previous_publication():
+            print("PUBLICATIE OVERGESLAGEN: geen complete veilige terugval beschikbaar.", flush=True)
+            raise SystemExit(1)
