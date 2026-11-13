@@ -320,7 +320,7 @@ async def make_images() -> None:
             # dagrijen samengesteld: geen nieuwe API-calls of uurlijkse maxima.
             narrative = await forecast.evaluate(r"""el => {
               const rows=[...el.querySelectorAll('.rico5DayRow')].map(r=>({
-                date:r.dataset.date, type:(r.dataset.type||'').toLowerCase(),
+                date:r.dataset.date, type:(r.dataset.type||'').toLowerCase(), visible:(r.innerText||'').toLowerCase(),
                 max:Number(r.dataset.max),min:Number(r.dataset.min),
                 rain:r.dataset.rain===''?null:Number(r.dataset.rain),
                 sun:r.dataset.sun===''?null:Number(r.dataset.sun),
@@ -335,7 +335,10 @@ async def make_images() -> None:
               // Absolute zonuren zijn GEEN zonpercentage; gebruik ze daarom
               // niet als losse drempel voor een zonnig symbool.
               const category=r=>{
-                const t=r.type;
+                // De zichtbare dagomschrijving is leidend als de interne typecode
+                // ontbreekt of een andere codering gebruikt.
+                const known=/onweer|sneeuw|regenachtig|regen|nat|bui|vrij zonnig|zonnig|veel zon|zon en wolken|half bewolkt|wisselend bewolkt|veel bewolking|weinig zon|geheel bewolkt|bewolkt|grijs/;
+                const t=known.test(r.type)?r.type:r.visible.split('\n').map(x=>x.trim()).find(x=>known.test(x))||r.type;
                 if(/onweer/.test(t))return 'onweer';
                 if(/sneeuw/.test(t))return 'sneeuw';
                 if(/regenachtig|regen|nat/.test(t))return 'regen';
@@ -347,7 +350,7 @@ async def make_images() -> None:
                 if(/geheel bewolkt|bewolkt|grijs/.test(t))return 'bewolkt';
                 if(/zon/.test(t))return 'zonwolken';
                 if(r.rain!==null&&r.rain>=2)return 'regen';
-                return 'gemengd';
+                return 'onbekend';
               };
               const phrase={onweer:'met kans op onweer',sneeuw:'met kans op sneeuw',regen:'met perioden met regen',buien:'met af en toe buien',zon:'met zonnig en droog weer',bewolkt:'met overwegend veel bewolking',zonwolken:'met zon en wolken',gemengd:'met een afwisseling van wolken en opklaringen'};
               const first=rows.slice(0,5),later=rows.slice(5);
@@ -373,18 +376,28 @@ async def make_images() -> None:
                   zonwolken:'wisselen zon en wolken elkaar af',
                   veelbewolking:'is het vaak bewolkt met soms wat zon',
                   bewolkt:'blijft het bewolkt',
-                  gemengd:'zijn er wolken en opklaringen'})[k];
+                  onbekend:'is het weer veranderlijk'})[k];
               };
-              const p1=`${label(a)} ${weather(a)}. Het wordt ongeveer ${rounded(a.max)} graden. ${label(b)} ${weather(b)} en wordt het ${rounded(b.max)} graden.`;
+              const p1=`${label(a)} ${weather(a)}. Het wordt ${rounded(a.max)} graden. ${label(b)} ${weather(b)} en wordt het ${rounded(b.max)} graden.`;
               const rest=rows.slice(2,5);
-              const wetRest=wetCount(rest);
               const restHi=hi(rest),restLo=lo(rest);
-              const restWeather=wetRest>=2?'blijft het wisselvallig met kans op regen of buien':wetRest===1?'wisselen droge perioden en een enkele regenkans elkaar af':'is het vaak droog, met af en toe ruimte voor de zon';
-              const tempRest=restHi-restLo>=3?` De maxima lopen uiteen van ${rounded(restLo)} tot ${rounded(restHi)} graden.`:` De maxima liggen rond ${rounded(Math.round(rest.reduce((n,r)=>n+r.max,0)/rest.length))} graden.`;
-              const p2=`De dagen daarna ${restWeather}.${tempRest}${windText(first)}`;
+              const wetRest=wetCount(rest);
+              const rainiest=rest.filter(r=>r.rain!==null).sort((x,y)=>y.rain-x.rain)[0];
+              const restWeather=wetRest>=2?'Na het weekend valt op meerdere dagen regen of komen buien voor.':wetRest===1?'Na het weekend zijn er droge perioden, maar valt ook plaatselijk regen.':'Na het weekend is het meestal droog.';
+              const tempRest=restHi-restLo>=3?` De maxima liggen tussen ${rounded(restLo)} en ${rounded(restHi)} graden.`:'';
+              const rainDetail=rainiest&&rainiest.rain>=10?` Vooral ${day(rainiest.date)} kan het flink regenen.`:'';
+              const p2=`${restWeather}${rainDetail}${tempRest}${windText(first)}`;
               const laterWet=wetCount(later);
-              const outlook=laterWet>=3?'Ook verder vooruit blijft het wisselvallig.':laterWet>=1?'Verder vooruit zijn er droge perioden, maar ook kansen op neerslag.':'Verder vooruit lijkt het overwegend droog te blijven.';
-              const p3=`${outlook} Het wordt ${rounded(lo(later))} tot ${rounded(hi(later))} graden. De onzekerheid neemt toe.`;
+              const earlyLater=wetCount(later.slice(0,3));
+              const lateLater=wetCount(later.slice(3));
+              const lateSunny=later.slice(3).filter(r=>['zon','vrijzon','zonwolken'].includes(category(r))).length;
+              let outlook;
+              if(earlyLater>=2&&lateLater===0&&lateSunny>=1)outlook='Verder vooruit lijkt het richting het weekend droger en zonniger te worden.';
+              else if(earlyLater===0&&lateLater>=1)outlook='Verder vooruit neemt de kans op regen weer toe.';
+              else if(laterWet>=3)outlook='Ook daarna blijven regen en buien mogelijk.';
+              else if(laterWet>=1)outlook='Verder vooruit wisselen droge perioden en enkele buien elkaar af.';
+              else outlook='Verder vooruit lijkt het overwegend droog te blijven.';
+              const p3=`${outlook} De maxima liggen tussen ${rounded(lo(later))} en ${rounded(hi(later))} graden.`;
               const box=document.createElement('section');
               box.id='ricoExportRandstadNarrative';
               box.setAttribute('aria-label','Automatisch weerbericht Randstad');
@@ -400,10 +413,10 @@ async def make_images() -> None:
               box.lastElementChild.style.marginBottom='0';
               const firstRow=el.querySelector('.rico5DayRow');
               firstRow.parentNode.insertBefore(box,firstRow);
-              return {text:[p1,p2,p3].join(' '),words:[p1,p2,p3].join(' ').split(/\s+/).length};
+              return {text:[p1,p2,p3].join(' '),words:[p1,p2,p3].join(' ').split(/\s+/).length, firstType:a.type,firstVisible:a.visible.slice(0,120),firstCategory:category(a)};
             }""")
-            print('Randstad-weerbericht:',narrative['words'],'woorden',flush=True)
-            if narrative['words'] < 35 or narrative['words'] > 115:
+            print('Randstad-weerbericht:',json.dumps(narrative,ensure_ascii=False),flush=True)
+            if narrative['words'] < 25 or narrative['words'] > 115:
                 raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
             compact_file=OUT/'randstad-5dagen.png'
             await forecast.screenshot(path=str(compact_file),type='png',animations='disabled',timeout=50000)
