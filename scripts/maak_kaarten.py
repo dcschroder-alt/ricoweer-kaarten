@@ -296,6 +296,59 @@ async def make_images() -> None:
             forecast_size=await forecast.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
             if forecast_size['w']<400 or forecast_size['h']<250:
                 raise RuntimeError('Randstad overzicht te klein; publicatie gestopt: '+str(forecast_size))
+            # WordPress: zelfstandig Randstad-weerbericht BOVEN de tien dagregels.
+            # De tekst wordt uitsluitend uit de reeds gecontroleerde regionale
+            # dagrijen samengesteld: geen nieuwe API-calls of uurlijkse maxima.
+            narrative = await forecast.evaluate(r"""el => {
+              const rows=[...el.querySelectorAll('.rico5DayRow')].map(r=>({
+                date:r.dataset.date, type:(r.dataset.type||'').toLowerCase(),
+                max:Number(r.dataset.max),min:Number(r.dataset.min),
+                rain:r.dataset.rain===''?null:Number(r.dataset.rain),
+                sun:r.dataset.sun===''?null:Number(r.dataset.sun),
+                wind:r.dataset.wind===''?null:Number(r.dataset.wind)
+              }));
+              if(rows.length!==10 || rows.some(r=>!r.date||!Number.isFinite(r.max)))
+                throw new Error('Geen tien geldige dagwaarden voor Randstad-weerbericht');
+              const day=d=>new Intl.DateTimeFormat('nl-NL',{weekday:'long',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
+              const rounded=n=>Math.round(n);
+              const describe=r=>{
+                const t=r.type;
+                if(/onweer/.test(t))return 'kans op onweer';
+                if(/sneeuw/.test(t))return 'kans op sneeuw';
+                if(/regenachtig|regen|nat/.test(t))return 'regelmatig regen';
+                if(/bui/.test(t))return 'zon en buien';
+                if(/zonnig|veel zon/.test(t))return 'veel zon';
+                if(/bewolkt|grijs/.test(t))return 'veel bewolking';
+                if(/zon/.test(t))return 'zon en wolken';
+                return 'wisselende bewolking';
+              };
+              const first=rows.slice(0,5),later=rows.slice(5);
+              const hi=arr=>Math.max(...arr.map(r=>r.max));
+              const lo=arr=>Math.min(...arr.map(r=>r.max));
+              const wet=arr=>arr.filter(r=>/regen|bui|nat|onweer|sneeuw/.test(r.type)||(r.rain!==null&&r.rain>=1)).length;
+              const p1=`${day(first[0].date).replace(/^./,c=>c.toUpperCase())} begint de verwachting met ${describe(first[0])} en een middagtemperatuur rond ${rounded(first[0].max)} graden. ${day(first[1].date).replace(/^./,c=>c.toUpperCase())} volgt ${describe(first[1])}, bij ongeveer ${rounded(first[1].max)} graden. De verwachting geldt voor de Randstad, van de kust en het westelijk binnenland tot Utrecht en Flevoland.`;
+              const p2=`In de dagen daarna is het op ${day(first[2].date)} ${describe(first[2])}, op ${day(first[3].date)} ${describe(first[3])} en op ${day(first[4].date)} ${describe(first[4])}. De middagtemperaturen liggen deze eerste vijf dagen tussen ${rounded(lo(first))} en ${rounded(hi(first))} graden. ${wet(first)>=3?'Op meerdere dagen is neerslag mogelijk.': 'Er zijn ook droge momenten te verwachten.'}`;
+              const p3=`Vooruitblik dag 6 tot en met 10: ${wet(later)>=3?'het wisselvallige weer houdt waarschijnlijk aan, met geregeld kans op neerslag.':'er zijn droge perioden, al blijft plaatselijk neerslag mogelijk.'} De middagtemperatuur varieert in deze periode van ongeveer ${rounded(lo(later))} tot ${rounded(hi(later))} graden. Verder vooruit neemt de onzekerheid toe; de dagelijkse details kunnen bij nieuwe modelruns veranderen.`;
+              const box=document.createElement('section');
+              box.id='ricoExportRandstadNarrative';
+              box.setAttribute('aria-label','Automatisch weerbericht Randstad');
+              box.style.cssText='box-sizing:border-box;margin:9px 8px 12px;padding:14px 15px;background:#e6f2fa;border:1px solid #bfdbe9;border-radius:12px;color:#17445f;font:15px/1.52 Arial,sans-serif;overflow-wrap:break-word;';
+              const title=document.createElement('div');
+              title.textContent='Weerbericht Randstad';
+              title.style.cssText='font-size:19px;line-height:1.25;font-weight:800;margin-bottom:9px;color:#07527a';
+              box.appendChild(title);
+              for(const text of [p1,p2,p3]){
+                const p=document.createElement('p');p.textContent=text;
+                p.style.cssText='margin:0 0 9px';box.appendChild(p);
+              }
+              box.lastElementChild.style.marginBottom='0';
+              const firstRow=el.querySelector('.rico5DayRow');
+              firstRow.parentNode.insertBefore(box,firstRow);
+              return {text:[p1,p2,p3].join(' '),words:[p1,p2,p3].join(' ').split(/\s+/).length};
+            }""")
+            print('Randstad-weerbericht:',narrative['words'],'woorden',flush=True)
+            if narrative['words'] < 90 or narrative['words'] > 170:
+                raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
             compact_file=OUT/'randstad-5dagen.png'
             await forecast.screenshot(path=str(compact_file),type='png',animations='disabled',timeout=50000)
             if compact_file.stat().st_size<12000:
