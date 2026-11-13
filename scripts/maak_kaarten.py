@@ -24,6 +24,7 @@ SCAN_KEY = "rico-national-scan-v75-35punten"
 MIN_POINTS = 12
 MAX_AGE_MS = 4 * 60 * 60 * 1000
 MAX_WAIT_MS = int(os.environ.get("MAX_WAIT_MS", "220000"))
+RETRY_WAIT_MS = int(os.environ.get("RETRY_WAIT_MS", "160000"))
 
 EXPORT_CSS = """
 #ricoLiveShell {max-width:1060px!important; padding:12px 10px!important}
@@ -154,7 +155,9 @@ async def make_images() -> None:
                 locale="nl-NL", timezone_id="Europe/Amsterdam", service_workers="block",
             )
             page = await context.new_page()
-            page.on("pageerror", lambda e: errors.append(str(e)) if len(errors) < 10 else None)
+            page.on("pageerror", lambda e: errors.append(str(e)) if len(errors) < 15 else None)
+            page.on("requestfailed", lambda req: errors.append(f"Aanvraag mislukt: {req.url[:180]} ({req.failure})") if len(errors) < 15 else None)
+            page.on("response", lambda res: errors.append(f"HTTP {res.status}: {res.url[:180]}") if res.status >= 400 and len(errors) < 15 else None)
             page.set_default_timeout(25000)
             from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
             u = urlparse(SOURCE)
@@ -167,17 +170,27 @@ async def make_images() -> None:
                 raise RuntimeError(f"De publieke bronkaart is niet bereikbaar: HTTP {code}. Controleer weerkaart.html.")
 
             await page.add_style_tag(content=EXPORT_CSS)
-            try:
-                await page.wait_for_function(
-                    VALIDATED_JS,
-                    arg={"cacheKey": SCAN_KEY, "dates": expected, "maxAge": MAX_AGE_MS, "minPts": MIN_POINTS},
-                    timeout=MAX_WAIT_MS, polling=1500,
-                )
-            except PlaywrightTimeoutError as exc:
-                debug = await page.evaluate(DEBUG_JS, SCAN_KEY)
-                print("Diagnose:", json.dumps(debug, ensure_ascii=False), flush=True)
-                print("Browserfouten:", errors, flush=True)
-                raise RuntimeError("Geen twee complete, actuele dagkaarten ontvangen; bestaande publicatie blijft behouden.") from exc
+            # Een scan kan tijdelijk vastlopen terwijl de pagina wel laadt.
+            # Probeer dan eenmaal opnieuw in dezelfde browsersessie. De inhoudelijke
+            # controles blijven ongewijzigd: nooit oude of incomplete kaarten publiceren.
+            for attempt in range(2):
+                try:
+                    await page.wait_for_function(
+                        VALIDATED_JS,
+                        arg={"cacheKey": SCAN_KEY, "dates": expected, "maxAge": MAX_AGE_MS, "minPts": MIN_POINTS},
+                        timeout=MAX_WAIT_MS if attempt == 0 else RETRY_WAIT_MS, polling=1500,
+                    )
+                    print(f"Landelijke scan compleet (poging {attempt + 1}).", flush=True)
+                    break
+                except PlaywrightTimeoutError as exc:
+                    debug = await page.evaluate(DEBUG_JS, SCAN_KEY)
+                    print(f"Landelijke scan niet compleet na poging {attempt + 1}:", json.dumps(debug, ensure_ascii=False), flush=True)
+                    print("Browser- en netwerkfouten:", errors[-15:], flush=True)
+                    if attempt == 1:
+                        raise RuntimeError("Geen twee complete, actuele dagkaarten na twee pogingen; bestaande publicatie blijft behouden.") from exc
+                    print("Herstart bronpagina voor een nieuwe modelscan...", flush=True)
+                    await page.reload(wait_until="domcontentloaded", timeout=55000)
+                    await page.add_style_tag(content=EXPORT_CSS)
 
             info = await page.evaluate(
                 "key => {const p=JSON.parse(localStorage.getItem(key));return {savedAt:p.savedAt,models:p.models,dates:p.days.map(x=>x.date)};}",
@@ -266,14 +279,20 @@ async def make_images() -> None:
             widget_response=await widget_page.goto(widget_source, wait_until='domcontentloaded',timeout=55000)
             if not widget_response or not widget_response.ok:
                 raise RuntimeError(f'Compacte bronpagina widgetkaart.html niet bereikbaar ({widget_response.status if widget_response else "geen reactie"}).')
-            try:
-                await widget_page.wait_for_function(WIDGET_VALIDATED_JS,
-                    arg={'cacheKey':SCAN_KEY,'date':expected[0],'maxAge':MAX_AGE_MS,'minPts':MIN_POINTS},
-                    timeout=MAX_WAIT_MS,polling=1300)
-            except PlaywrightTimeoutError as exc:
-                debug=await widget_page.evaluate(DEBUG_JS,SCAN_KEY)
-                print('Widgetdiagnose:',json.dumps(debug,ensure_ascii=False),flush=True)
-                raise RuntimeError('Widgetpagina heeft onvoldoende actuele dagmodelmix of kaartpunten.') from exc
+            for attempt in range(2):
+                try:
+                    await widget_page.wait_for_function(WIDGET_VALIDATED_JS,
+                        arg={'cacheKey':SCAN_KEY,'date':expected[0],'maxAge':MAX_AGE_MS,'minPts':MIN_POINTS},
+                        timeout=MAX_WAIT_MS if attempt == 0 else RETRY_WAIT_MS,polling=1300)
+                    print(f"Randstad-widget compleet (poging {attempt + 1}).", flush=True)
+                    break
+                except PlaywrightTimeoutError as exc:
+                    debug=await widget_page.evaluate(DEBUG_JS,SCAN_KEY)
+                    print(f'Widgetdiagnose poging {attempt + 1}:',json.dumps(debug,ensure_ascii=False),flush=True)
+                    if attempt == 1:
+                        raise RuntimeError('Widgetpagina heeft na twee pogingen onvoldoende actuele dagmodelmix of kaartpunten.') from exc
+                    print('Herstart widgetpagina voor nieuwe modelscan...',flush=True)
+                    await widget_page.reload(wait_until='domcontentloaded',timeout=55000)
             widget=widget_page.locator('#ricoLiveShell')
             await widget.scroll_into_view_if_needed()
             await widget_page.wait_for_timeout(1600)
