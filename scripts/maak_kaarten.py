@@ -417,52 +417,55 @@ async def make_images() -> None:
               firstRow.parentNode.insertBefore(box,firstRow);
               return {text:[p1,p2,p3].join(' '),words:[p1,p2,p3].join(' ').split(/\s+/).length, firstType:a.type,firstVisible:a.visible.slice(0,120),firstCategory:category(a)};
             }""")
-            # EC46: uitsluitend reeds beschikbare, recente cache van dezelfde herkomst.
-            # Geen extra API-aanroep; bij ontbrekende/verouderde gegevens geen blok.
-            ec46 = await widget_page.evaluate(r"""() => {
+            # EC46: verse GitHub-browser heeft meestal geen localStorage-cache.
+            # Gebruik de bestaande Ricoweer-functie; die hergebruikt cache indien aanwezig.
+            ec46 = await widget_page.evaluate(r"""async () => {
+              const result={weeks:[],error:null};
               try {
-                const pack=JSON.parse(localStorage.getItem('rw_ec46_6week_v1026')||'null');
-                if(!pack?.data?.weekly?.time?.length || !Number.isFinite(Number(pack.savedAt)))return null;
-                if(Date.now()-Number(pack.savedAt)>36*3600000 || Number(pack.savedAt)>Date.now()+60000)return null;
+                let pack=null;
+                try {pack=JSON.parse(localStorage.getItem('rw_ec46_6week_v1026')||'null')}catch(e){}
+                const valid=p=>p?.data?.weekly?.time?.length && Number.isFinite(Number(p.savedAt)) &&
+                  Date.now()-Number(p.savedAt)<36*3600000 && Number(p.savedAt)<=Date.now()+60000;
+                if(!valid(pack)) {
+                  if(typeof lr6Fetch!=='function')throw Error('EC46-ophaalfunctie ontbreekt');
+                  pack=await lr6Fetch(false);
+                }
+                if(!pack?.data?.weekly?.time?.length)throw Error('Geen EC46-weekgegevens');
                 const w=pack.data.weekly, today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-                const weeks=w.time.map((start,i)=>{
-                  const next=w.time[i+1],end=new Date(Date.parse((next||start)+'T12:00:00Z')+(next?-1:6)*86400000).toISOString().slice(0,10);
-                  const val=k=>w[k]?.[i]===null||w[k]?.[i]===undefined?null:Number(w[k][i]);
-                  const anomaly=val('temperature_2m_anomaly'),rain=val('precipitation_anomaly'),wet=val('precipitation_anomaly_gt0');
-                  return {start,end,anomaly:Number.isFinite(anomaly)?anomaly:null,rain:Number.isFinite(rain)?rain:null,wet:Number.isFinite(wet)?(wet<=1?wet*100:wet):null};
+                const dates=w.time;
+                const addDays=(d,n)=>new Date(Date.parse(d+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
+                const weeks=dates.map((start,i)=>{
+                  const end=dates[i+1]?addDays(dates[i+1],-1):addDays(start,6);
+                  const num=k=>{const raw=w[k]?.[i];if(raw===null||raw===undefined||raw==='')return null;const v=Number(raw);return Number.isFinite(v)?v:null};
+                  const wetRaw=num('precipitation_anomaly_gt0');
+                  return {start,end,anomaly:num('temperature_2m_anomaly'),wet:wetRaw===null?null:(wetRaw<=1?wetRaw*100:wetRaw)};
                 }).filter(x=>x.end>=today);
-                // Week 3-6 vanaf de actuele EC46-week; geen overlap met de tiendaagse.
-                const future=weeks.slice(2,6).filter(x=>x.anomaly!==null);
-                if(!future.length)return null;
-                return {savedAt:pack.savedAt,weeks:future};
-              }catch(e){return null}
+                // Volledige toekomstige weken tellen vanaf week 1; huidige restweek telt niet mee.
+                const future=weeks.filter(x=>x.start>today);
+                result.weeks=future.slice(2,6).filter(x=>x.anomaly!==null);
+                if(!result.weeks.length)result.error='Geen bruikbare temperatuurafwijkingen voor week 3–6';
+              }catch(e){result.error=String(e?.message||e)}
+              return result;
             }""")
-            if ec46:
-                print('EC46 uit bestaande cache:',json.dumps(ec46,ensure_ascii=False),flush=True)
-                ec46_display = await forecast.evaluate(r"""(el,pack) => {
-                  const box=document.createElement('section');
-                  box.id='ricoExportEC46';
-                  box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:12px 15px;background:#f3f7ff;border:1px solid #c9d8ec;border-radius:12px;color:#17445f;font:14px/1.5 Arial,sans-serif';
-                  const h=document.createElement('div');h.textContent='EC46 · vooruitblik week 3–6';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
-                  const lines=[];
-                  for(const w of pack.weeks){
-                    const temp=w.anomaly>=0.4?'warmer':w.anomaly<=-0.4?'kouder':'rond normaal';
-                    const delta=(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C';
-                    let rain='';
-                    if(w.wet!==null)rain=w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
-                    const start=new Date(w.start+'T12:00:00Z');
-                    const end=new Date(w.end+'T12:00:00Z');
-                    const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(d);
-                    lines.push(`${fmt(start)}–${fmt(end)}: ${temp} (${delta})${rain}`);
-                  }
-                  for(const line of lines){const d=document.createElement('div');d.textContent=line;d.style.margin='3px 0';box.appendChild(d)}
-                  const note=document.createElement('div');note.textContent='Indicatieve weektrend, geen dagverwachting.';note.style.cssText='font-size:11px;opacity:.8;margin-top:7px';box.appendChild(note);
-                  el.appendChild(box);
-                  return {lines,note:note.textContent};
-                }""",ec46)
-            else:
-                ec46_display=None
-                print('EC46 niet toegevoegd: geen recente, bruikbare EC46-cache aanwezig.',flush=True)
+            print('EC46 diagnose:',json.dumps(ec46,ensure_ascii=False),flush=True)
+            ec46_display = await forecast.evaluate(r"""(el,pack) => {
+              const box=document.createElement('section');box.id='ricoExportEC46';
+              box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:12px 15px;background:#f3f7ff;border:1px solid #c9d8ec;border-radius:12px;color:#17445f;font:14px/1.5 Arial,sans-serif';
+              const h=document.createElement('div');h.textContent='EC46 · vooruitblik week 3–6';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
+              const lines=[];
+              if(pack.weeks?.length){
+                for(const w of pack.weeks){
+                  const temp=w.anomaly>=.4?'warmer':w.anomaly<=-.4?'kouder':'rond normaal';
+                  const delta=(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C';
+                  const rain=w.wet===null?'':w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
+                  const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
+                  lines.push(`${fmt(w.start)}–${fmt(w.end)}: ${temp} (${delta})${rain}`);
+                }
+              }else lines.push('EC46-vooruitblik tijdelijk niet beschikbaar.');
+              for(const line of lines){const d=document.createElement('div');d.textContent=line;d.style.margin='3px 0';box.appendChild(d)}
+              const note=document.createElement('div');note.textContent='Indicatieve weektrend, geen dagverwachting.';note.style.cssText='font-size:11px;opacity:.8;margin-top:7px';box.appendChild(note);
+              el.appendChild(box);return {lines,note:note.textContent};
+            }""",ec46)
             print('Randstad-weerbericht:',json.dumps(narrative,ensure_ascii=False),flush=True)
             if narrative['words'] < 25 or narrative['words'] > 115:
                 raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
