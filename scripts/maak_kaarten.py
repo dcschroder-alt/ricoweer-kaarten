@@ -104,11 +104,15 @@ WIDGET_VALIDATED_JS = """({cacheKey, date, maxAge, minPts}) => {
  try {pack=JSON.parse(localStorage.getItem(cacheKey)||'null')} catch(e){return false}
  if(!pack||!Array.isArray(pack.models)||pack.models.length<2||!Array.isArray(pack.days))return false;
  if(Date.now()-Number(pack.savedAt||0)>maxAge)return false;
- const day=pack.days.find(x=>x.date===date);
+ const hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Amsterdam',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
+ const start=new Date(Date.parse(date+'T12:00:00Z')+(hour>=18?0:-86400000)).toISOString().slice(0,10);
+ const day=pack.days.find(x=>x.date===start);
  if(!day||day.pts.filter(p=>Number.isFinite(p.tx)&&Number.isFinite(p.tn)).length<minPts)return false;
  const card=document.querySelector('#ricoLiveShell #ricoWeatherAtlas .ricoWeatherGrid > .ricoWeatherCard:first-child');
  const rows=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')];
- const dates=Array.from({length:10},(_,i)=>new Date(Date.parse(date+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
+ const hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Amsterdam',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
+ const start=new Date(Date.parse(date+'T12:00:00Z')+(hour>=18?0:-86400000)).toISOString().slice(0,10);
+ const dates=Array.from({length:10},(_,i)=>new Date(Date.parse(start+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
  return !!card&&card.querySelectorAll('.ricoWeatherPin').length>=7 &&
         rows.length===10 && rows.every((r,i)=>r.dataset.date===dates[i]) &&
         !!document.querySelector('#ricoWidgetFacts .rico5DaySummary') &&
@@ -365,7 +369,7 @@ async def make_images() -> None:
                 return peak>=6?' De wind kan daarbij krachtig uitpakken.':peak>=5?' Af en toe staat er behoorlijk wat wind.':'';
               };
               const a=first[0],b=first[1];
-              const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+              const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
               const tomorrow=new Date(Date.parse(today+'T12:00:00Z')+86400000).toISOString().slice(0,10);
               const label=r=>r.date===today?'Vandaag':r.date===tomorrow?'Morgen':cap(day(r.date));
               const weather=r=>{
