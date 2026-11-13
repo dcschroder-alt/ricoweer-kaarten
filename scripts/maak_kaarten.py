@@ -110,8 +110,6 @@ WIDGET_VALIDATED_JS = """({cacheKey, date, maxAge, minPts}) => {
  if(!day||day.pts.filter(p=>Number.isFinite(p.tx)&&Number.isFinite(p.tn)).length<minPts)return false;
  const card=document.querySelector('#ricoLiveShell #ricoWeatherAtlas .ricoWeatherGrid > .ricoWeatherCard:first-child');
  const rows=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')];
- const hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Amsterdam',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
- const start=new Date(Date.parse(date+'T12:00:00Z')+(hour>=18?0:-86400000)).toISOString().slice(0,10);
  const dates=Array.from({length:10},(_,i)=>new Date(Date.parse(start+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
  return !!card&&card.querySelectorAll('.ricoWeatherPin').length>=7 &&
         rows.length===10 && rows.every((r,i)=>r.dataset.date===dates[i]) &&
