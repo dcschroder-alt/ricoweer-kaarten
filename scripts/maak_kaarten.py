@@ -310,25 +310,47 @@ async def make_images() -> None:
               if(rows.length!==10 || rows.some(r=>!r.date||!Number.isFinite(r.max)))
                 throw new Error('Geen tien geldige dagwaarden voor Randstad-weerbericht');
               const day=d=>new Intl.DateTimeFormat('nl-NL',{weekday:'long',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
+              const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
               const rounded=n=>Math.round(n);
-              const describe=r=>{
+              const category=r=>{
                 const t=r.type;
-                if(/onweer/.test(t))return 'kans op onweer';
-                if(/sneeuw/.test(t))return 'kans op sneeuw';
-                if(/regenachtig|regen|nat/.test(t))return 'regelmatig regen';
-                if(/bui/.test(t))return 'zon en buien';
-                if(/zonnig|veel zon/.test(t))return 'veel zon';
-                if(/bewolkt|grijs/.test(t))return 'veel bewolking';
-                if(/zon/.test(t))return 'zon en wolken';
-                return 'wisselende bewolking';
+                if(/onweer/.test(t))return 'onweer';
+                if(/sneeuw/.test(t))return 'sneeuw';
+                if(/regenachtig|regen|nat/.test(t))return 'regen';
+                if(/bui/.test(t))return 'buien';
+                if(/zonnig|veel zon/.test(t))return 'zon';
+                if(/bewolkt|grijs/.test(t))return 'bewolkt';
+                if(/zon/.test(t))return 'zonwolken';
+                if(r.rain!==null&&r.rain>=2)return 'regen';
+                if(r.sun!==null&&r.sun>=5)return 'zon';
+                return 'gemengd';
               };
+              const phrase={onweer:'met kans op onweer',sneeuw:'met kans op sneeuw',regen:'met perioden met regen',buien:'met af en toe buien',zon:'met veel ruimte voor de zon',bewolkt:'met overwegend veel bewolking',zonwolken:'met zon en wolken',gemengd:'met een afwisseling van wolken en opklaringen'};
               const first=rows.slice(0,5),later=rows.slice(5);
               const hi=arr=>Math.max(...arr.map(r=>r.max));
               const lo=arr=>Math.min(...arr.map(r=>r.max));
-              const wet=arr=>arr.filter(r=>/regen|bui|nat|onweer|sneeuw/.test(r.type)||(r.rain!==null&&r.rain>=1)).length;
-              const p1=`${day(first[0].date).replace(/^./,c=>c.toUpperCase())} begint de verwachting met ${describe(first[0])} en een middagtemperatuur rond ${rounded(first[0].max)} graden. ${day(first[1].date).replace(/^./,c=>c.toUpperCase())} volgt ${describe(first[1])}, bij ongeveer ${rounded(first[1].max)} graden. De verwachting geldt voor de Randstad, van de kust en het westelijk binnenland tot Utrecht en Flevoland.`;
-              const p2=`In de dagen daarna is het op ${day(first[2].date)} ${describe(first[2])}, op ${day(first[3].date)} ${describe(first[3])} en op ${day(first[4].date)} ${describe(first[4])}. De middagtemperaturen liggen deze eerste vijf dagen tussen ${rounded(lo(first))} en ${rounded(hi(first))} graden. ${wet(first)>=3?'Op meerdere dagen is neerslag mogelijk.': 'Er zijn ook droge momenten te verwachten.'}`;
-              const p3=`Vooruitblik dag 6 tot en met 10: ${wet(later)>=3?'het wisselvallige weer houdt waarschijnlijk aan, met geregeld kans op neerslag.':'er zijn droge perioden, al blijft plaatselijk neerslag mogelijk.'} De middagtemperatuur varieert in deze periode van ongeveer ${rounded(lo(later))} tot ${rounded(hi(later))} graden. Verder vooruit neemt de onzekerheid toe; de dagelijkse details kunnen bij nieuwe modelruns veranderen.`;
+              const wet=r=>['onweer','sneeuw','regen','buien'].includes(category(r))||(r.rain!==null&&r.rain>=1);
+              const wetCount=arr=>arr.filter(wet).length;
+              const windText=arr=>{
+                const valid=arr.map(r=>r.wind).filter(Number.isFinite);
+                if(!valid.length)return '';
+                const peak=Math.max(...valid);
+                return peak>=6?' De wind kan daarbij krachtig uitpakken.':peak>=5?' Af en toe staat er behoorlijk wat wind.':'';
+              };
+              const a=first[0],b=first[1];
+              const change=b.max-a.max;
+              const temperature=change>=2?' Het wordt daarbij duidelijk zachter.':change<=-2?' Daarbij wordt het merkbaar frisser.':'';
+              const p1=`${cap(day(a.date))} begint de periode ${phrase[category(a)]} en een middagtemperatuur rond ${rounded(a.max)} graden. ${cap(day(b.date))} volgt een dag ${phrase[category(b)]}; de temperatuur komt dan uit op ongeveer ${rounded(b.max)} graden.${temperature}`;
+              const mid=first.slice(2);
+              const groups=[];
+              for(const r of mid){const k=category(r);const last=groups[groups.length-1];if(last&&last.key===k)last.days.push(day(r.date));else groups.push({key:k,days:[day(r.date)]});}
+              const joinDays=arr=>arr.length===1?arr[0]:arr.length===2?arr.join(' en '):arr.slice(0,-1).join(', ')+' en '+arr[arr.length-1];
+              const midDescription=groups.map(g=>`${cap(joinDays(g.days))} ${g.days.length>1?'verlopen':'verloopt'} ${phrase[g.key]}`).join('. ')+'.';
+              const midTrend=hi(mid)-lo(mid)>=3?` De temperatuurverschillen zijn merkbaar, met maxima van ${rounded(lo(mid))} tot ${rounded(hi(mid))} graden.`:` De maxima liggen rond ${rounded(Math.round(mid.reduce((n,r)=>n+r.max,0)/mid.length))} graden.`;
+              const p2=`Na het weekend blijft het weer in beweging. ${midDescription}${midTrend}${windText(first)}`;
+              const laterWet=wetCount(later),laterCats=new Set(later.map(category));
+              const outlook=laterWet>=4?'Ook verder vooruit overheerst het wisselvallige weerbeeld, met op meerdere dagen kans op regen of buien.':laterWet>=2?'In de tweede helft van de periode wisselen droge momenten en dagen met neerslagkansen elkaar af.':laterCats.has('zon')?'Verder vooruit zijn er geregeld droge perioden en is er ook ruimte voor de zon.':'Verder vooruit zijn er overwegend droge perioden, al is een bui niet uitgesloten.';
+              const p3=`Vooruitblik dag 6 tot en met 10: ${outlook} De middagtemperatuur ligt tussen ongeveer ${rounded(lo(later))} en ${rounded(hi(later))} graden. De onzekerheid neemt verder vooruit toe.`;
               const box=document.createElement('section');
               box.id='ricoExportRandstadNarrative';
               box.setAttribute('aria-label','Automatisch weerbericht Randstad');
@@ -347,7 +369,7 @@ async def make_images() -> None:
               return {text:[p1,p2,p3].join(' '),words:[p1,p2,p3].join(' ').split(/\s+/).length};
             }""")
             print('Randstad-weerbericht:',narrative['words'],'woorden',flush=True)
-            if narrative['words'] < 90 or narrative['words'] > 170:
+            if narrative['words'] < 75 or narrative['words'] > 180:
                 raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
             compact_file=OUT/'randstad-5dagen.png'
             await forecast.screenshot(path=str(compact_file),type='png',animations='disabled',timeout=50000)
