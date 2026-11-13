@@ -417,6 +417,52 @@ async def make_images() -> None:
               firstRow.parentNode.insertBefore(box,firstRow);
               return {text:[p1,p2,p3].join(' '),words:[p1,p2,p3].join(' ').split(/\s+/).length, firstType:a.type,firstVisible:a.visible.slice(0,120),firstCategory:category(a)};
             }""")
+            # EC46: uitsluitend reeds beschikbare, recente cache van dezelfde herkomst.
+            # Geen extra API-aanroep; bij ontbrekende/verouderde gegevens geen blok.
+            ec46 = await widget_page.evaluate(r"""() => {
+              try {
+                const pack=JSON.parse(localStorage.getItem('rw_ec46_6week_v1026')||'null');
+                if(!pack?.data?.weekly?.time?.length || !Number.isFinite(Number(pack.savedAt)))return null;
+                if(Date.now()-Number(pack.savedAt)>36*3600000 || Number(pack.savedAt)>Date.now()+60000)return null;
+                const w=pack.data.weekly, today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+                const weeks=w.time.map((start,i)=>{
+                  const next=w.time[i+1],end=new Date(Date.parse((next||start)+'T12:00:00Z')+(next?-1:6)*86400000).toISOString().slice(0,10);
+                  const val=k=>w[k]?.[i]===null||w[k]?.[i]===undefined?null:Number(w[k][i]);
+                  const anomaly=val('temperature_2m_anomaly'),rain=val('precipitation_anomaly'),wet=val('precipitation_anomaly_gt0');
+                  return {start,end,anomaly:Number.isFinite(anomaly)?anomaly:null,rain:Number.isFinite(rain)?rain:null,wet:Number.isFinite(wet)?(wet<=1?wet*100:wet):null};
+                }).filter(x=>x.end>=today);
+                // Week 3-6 vanaf de actuele EC46-week; geen overlap met de tiendaagse.
+                const future=weeks.slice(2,6).filter(x=>x.anomaly!==null);
+                if(!future.length)return null;
+                return {savedAt:pack.savedAt,weeks:future};
+              }catch(e){return null}
+            }""")
+            if ec46:
+                print('EC46 uit bestaande cache:',json.dumps(ec46,ensure_ascii=False),flush=True)
+                ec46_display = await forecast.evaluate(r"""(el,pack) => {
+                  const box=document.createElement('section');
+                  box.id='ricoExportEC46';
+                  box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:12px 15px;background:#f3f7ff;border:1px solid #c9d8ec;border-radius:12px;color:#17445f;font:14px/1.5 Arial,sans-serif';
+                  const h=document.createElement('div');h.textContent='EC46 · vooruitblik week 3–6';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
+                  const lines=[];
+                  for(const w of pack.weeks){
+                    const temp=w.anomaly>=0.4?'warmer':w.anomaly<=-0.4?'kouder':'rond normaal';
+                    const delta=(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C';
+                    let rain='';
+                    if(w.wet!==null)rain=w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
+                    const start=new Date(w.start+'T12:00:00Z');
+                    const end=new Date(w.end+'T12:00:00Z');
+                    const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(d);
+                    lines.push(`${fmt(start)}–${fmt(end)}: ${temp} (${delta})${rain}`);
+                  }
+                  for(const line of lines){const d=document.createElement('div');d.textContent=line;d.style.margin='3px 0';box.appendChild(d)}
+                  const note=document.createElement('div');note.textContent='Indicatieve weektrend, geen dagverwachting.';note.style.cssText='font-size:11px;opacity:.8;margin-top:7px';box.appendChild(note);
+                  el.appendChild(box);
+                  return {lines,note:note.textContent};
+                }""",ec46)
+            else:
+                ec46_display=None
+                print('EC46 niet toegevoegd: geen recente, bruikbare EC46-cache aanwezig.',flush=True)
             print('Randstad-weerbericht:',json.dumps(narrative,ensure_ascii=False),flush=True)
             if narrative['words'] < 25 or narrative['words'] > 115:
                 raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
@@ -475,6 +521,8 @@ async def make_images() -> None:
               const paragraphs = text.split(/(?<=\.)\s+(?=[A-Z])/); // unused: preserve original text
               const original = document.getElementById('ricoExportRandstadNarrative');
               const ptexts = [...(original?.querySelectorAll('p')||[])].map(p=>p.textContent);
+              const ec46=document.getElementById('ricoExportEC46');
+              const ec46Lines=ec46?[...ec46.querySelectorAll('div')].map(x=>x.textContent):[];
               if(ptexts.length!==3)throw new Error('Weerbericht ontbreekt bij PNG-compositie');
               ctx.font=`${Math.round(23*scale)}px Arial`;
               function wrap(str){
@@ -488,6 +536,7 @@ async def make_images() -> None:
                 return result;
               }
               const lines=ptexts.map(wrap);
+              if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 3–6'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
               const headingHeight=Math.round(58*scale);
               const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
               const topHeight=pad+headingHeight+textHeight+pad;
