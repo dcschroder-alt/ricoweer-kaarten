@@ -646,6 +646,7 @@ if __name__ == "__main__":
         asyncio.run(make_images())
     except Exception as error:
         print(f"Nieuwe publicatie mislukt: {error}", flush=True)
-        if not restore_previous_publication():
-            print("PUBLICATIE OVERGESLAGEN: geen complete veilige terugval beschikbaar.", flush=True)
-            raise SystemExit(1)
+        # Geen oude PNG's opnieuw als succesvolle update publiceren.
+        # GitHub Pages behoudt de bestaande deployment als deze stap faalt.
+        print("PUBLICATIE MISLUKT: geen actuele PNG's gemaakt; bestaande GitHub Pages-publicatie blijft staan.", flush=True)
+        raise SystemExit(1)
