@@ -439,24 +439,32 @@ async def make_images() -> None:
                   pack=await lr6Fetch(false);
                 }
                 if(!pack?.data?.weekly?.time?.length)throw Error('Geen EC46-weekgegevens');
-                const w=pack.data.weekly, today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-                const dates=w.time;
-                const addDays=(d,n)=>new Date(Date.parse(d+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
-                const weeks=dates.map((start,i)=>{
-                  const end=dates[i+1]?addDays(dates[i+1],-1):addDays(start,6);
-                  const num=k=>{const raw=w[k]?.[i];if(raw===null||raw===undefined||raw==='')return null;const v=Number(raw);return Number.isFinite(v)?v:null};
-                  const wetRaw=num('precipitation_anomaly_gt0');
-                  // Een absolute weektemperatuur kan alleen worden getoond wanneer de bron
-                  // een echte weektemperatuur of bijpassende klimatologische normaal levert.
-                  const absolute=['temperature_2m_mean','temperature_2m','temperature_mean'].map(num).find(v=>v!==null);
-                  const normal=['temperature_2m_mean_normal','temperature_2m_normal','temperature_2m_climatology','temperature_2m_mean_climatology'].map(num).find(v=>v!==null);
-                  const anomaly=num('temperature_2m_anomaly');
-                  return {start,end,anomaly,absolute:absolute??(normal!==undefined&&anomaly!==null?normal+anomaly:null),wet:wetRaw===null?null:(wetRaw<=1?wetRaw*100:wetRaw)};
-                }).filter(x=>x.end>=today);
-                // Volledige toekomstige weken tellen vanaf week 1; huidige restweek telt niet mee.
-                const future=weeks.filter(x=>x.start>today);
-                result.weeks=future.slice(2,6).filter(x=>x.anomaly!==null);
-                if(!result.weeks.length)result.error='Geen bruikbare temperatuurafwijkingen voor week 3–6';
+                // Neem exact de EC46-maximaspreiding uit de bestaande app over.
+                // De app combineert KNMI TX-klimaat 1996-2025 met EC46-afwijking,
+                // of gebruikt dagelijkse EC46-maxima als terugval.
+                if(typeof lr6BuildWeeks!=='function' || typeof lr6DisplayWeeks!=='function')
+                  throw Error('EC46-spreidingsfunctie ontbreekt in bronpagina');
+                let climate=[];
+                if(typeof loadClimateDaily==='function') {
+                  try { climate=await loadClimateDaily(false) || []; } catch(e) {
+                    result.climateError=String(e?.message||e);
+                  }
+                }
+                const all=lr6BuildWeeks(pack.data,climate);
+                const future=lr6DisplayWeeks(all).filter(x=>!x.partial);
+                const wetValue=x=>{
+                  const i=x.i,raw=pack.data.weekly?.precipitation_anomaly_gt0?.[i];
+                  if(raw===null||raw===undefined||raw==='')return null;
+                  const v=Number(raw);return Number.isFinite(v)?(v<=1?v*100:v):null;
+                };
+                result.weeks=future.slice(2,6).map(x=>({
+                  start:x.start,end:x.end,
+                  anomaly:Number.isFinite(x.tA)?x.tA:null,
+                  txMin:Number.isFinite(x.txMin)?x.txMin:null,
+                  txMax:Number.isFinite(x.txMax)?x.txMax:null,
+                  wet:wetValue(x)
+                }));
+                if(!result.weeks.length)result.error='Geen bruikbare EC46-weken 3–6';
               }catch(e){result.error=String(e?.message||e)}
               return result;
             }""")
@@ -470,7 +478,10 @@ async def make_images() -> None:
                 for(const w of pack.weeks){
                   const temp=w.anomaly>=.4?'warmer':w.anomaly<=-.4?'kouder':'rond normaal';
                   const delta=(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C';
-                  const actual=Number.isFinite(w.absolute)?`gemiddeld ${w.absolute.toFixed(1).replace('.',',')} °C (${delta} t.o.v. normaal)`:`${temp} (${delta} t.o.v. normaal)`;
+                  const hasMax=Number.isFinite(w.txMin)&&Number.isFinite(w.txMax);
+                  const actual=hasMax
+                    ?`maxima ${Math.floor(w.txMin)}–${Math.ceil(w.txMax)} °C`
+                    :`${temp} (${delta} t.o.v. normaal; maxima niet beschikbaar)`;
                   const rain=w.wet===null?'':w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
                   const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
                   lines.push(`${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain}`);
