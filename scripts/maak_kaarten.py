@@ -363,8 +363,9 @@ async def make_images() -> None:
               const windText=arr=>{
                 const valid=arr.map(r=>r.wind).filter(Number.isFinite);
                 if(!valid.length)return '';
-                const peak=Math.max(...valid);
-                return peak>=6?' De wind kan daarbij krachtig uitpakken.':peak>=5?' Af en toe staat er behoorlijk wat wind.':'';
+                const min=Math.round(Math.min(...valid)),max=Math.round(Math.max(...valid));
+                if(max<4)return '';
+                return min===max?` De wind is ongeveer ${max} Bft.`:` De wind varieert van ${min} tot ${max} Bft.`;
               };
               const a=first[0],b=first[1];
               const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -385,7 +386,8 @@ async def make_images() -> None:
               const restHi=hi(rest),restLo=lo(rest);
               const wetRest=wetCount(rest);
               const rainiest=rest.filter(r=>r.rain!==null).sort((x,y)=>y.rain-x.rain)[0];
-              const restWeather=wetRest>=2?'Na het weekend valt op meerdere dagen regen of komen buien voor.':wetRest===1?'Na het weekend zijn er droge perioden, maar valt ook plaatselijk regen.':'Na het weekend is het meestal droog.';
+              const transition=`Vanaf ${day(rest[0].date)}`;
+              const restWeather=wetRest>=2?`${transition} valt op meerdere dagen regen of komen buien voor.`:wetRest===1?`${transition} zijn er droge perioden, maar valt ook plaatselijk regen.`:`${transition} is het meestal droog.`;
               const tempRest=restHi-restLo>=3?` De maxima liggen tussen ${rounded(restLo)} en ${rounded(restHi)} graden.`:'';
               const rainDetail=rainiest&&rainiest.rain>=10?` Vooral ${day(rainiest.date)} kan het flink regenen.`:'';
               const p2=`${restWeather}${rainDetail}${tempRest}${windText(first)}`;
@@ -438,7 +440,12 @@ async def make_images() -> None:
                   const end=dates[i+1]?addDays(dates[i+1],-1):addDays(start,6);
                   const num=k=>{const raw=w[k]?.[i];if(raw===null||raw===undefined||raw==='')return null;const v=Number(raw);return Number.isFinite(v)?v:null};
                   const wetRaw=num('precipitation_anomaly_gt0');
-                  return {start,end,anomaly:num('temperature_2m_anomaly'),wet:wetRaw===null?null:(wetRaw<=1?wetRaw*100:wetRaw)};
+                  // Een absolute weektemperatuur kan alleen worden getoond wanneer de bron
+                  // een echte weektemperatuur of bijpassende klimatologische normaal levert.
+                  const absolute=['temperature_2m_mean','temperature_2m','temperature_mean'].map(num).find(v=>v!==null);
+                  const normal=['temperature_2m_mean_normal','temperature_2m_normal','temperature_2m_climatology','temperature_2m_mean_climatology'].map(num).find(v=>v!==null);
+                  const anomaly=num('temperature_2m_anomaly');
+                  return {start,end,anomaly,absolute:absolute??(normal!==undefined&&anomaly!==null?normal+anomaly:null),wet:wetRaw===null?null:(wetRaw<=1?wetRaw*100:wetRaw)};
                 }).filter(x=>x.end>=today);
                 // Volledige toekomstige weken tellen vanaf week 1; huidige restweek telt niet mee.
                 const future=weeks.filter(x=>x.start>today);
@@ -457,9 +464,10 @@ async def make_images() -> None:
                 for(const w of pack.weeks){
                   const temp=w.anomaly>=.4?'warmer':w.anomaly<=-.4?'kouder':'rond normaal';
                   const delta=(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C';
+                  const actual=Number.isFinite(w.absolute)?`gemiddeld ${w.absolute.toFixed(1).replace('.',',')} °C (${delta} t.o.v. normaal)`:`${temp} (${delta} t.o.v. normaal)`;
                   const rain=w.wet===null?'':w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
                   const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
-                  lines.push(`${fmt(w.start)}–${fmt(w.end)}: ${temp} (${delta})${rain}`);
+                  lines.push(`${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain}`);
                 }
               }else lines.push('EC46-vooruitblik tijdelijk niet beschikbaar.');
               for(const line of lines){const d=document.createElement('div');d.textContent=line;d.style.margin='3px 0';box.appendChild(d)}
