@@ -326,13 +326,14 @@ async def make_images() -> None:
                 max:Number(r.dataset.max),min:Number(r.dataset.min),
                 rain:r.dataset.rain===''?null:Number(r.dataset.rain),
                 sun:r.dataset.sun===''?null:Number(r.dataset.sun),
-                wind:r.dataset.wind===''?null:Number(r.dataset.wind)
+                wind:(()=>{const m=(r.innerText||'').match(/(?:^|\s)([0-9]|1[0-2])\s*Bft\b/i);return m?Number(m[1]):null;})()
               }));
               if(rows.length!==10 || rows.some(r=>!r.date||!Number.isFinite(r.max)))
                 throw new Error('Geen tien geldige dagwaarden voor Randstad-weerbericht');
               const day=d=>new Intl.DateTimeFormat('nl-NL',{weekday:'long',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
               const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
               const rounded=n=>Math.round(n);
+              const tempText=(low,high)=>{const a=rounded(low),b=rounded(high);return a===b?`Het wordt ${a} graden.`:b-a<=1?`Het wordt ${a} of ${b} graden.`:`De maxima liggen tussen ${a} en ${b} graden.`;};
               // Dagtype is leidend: dezelfde categorie als het dagsymbool.
               // Absolute zonuren zijn GEEN zonpercentage; gebruik ze daarom
               // niet als losse drempel voor een zonnig symbool.
@@ -360,13 +361,6 @@ async def make_images() -> None:
               const lo=arr=>Math.min(...arr.map(r=>r.max));
               const wet=r=>['onweer','sneeuw','regen','buien'].includes(category(r))||(r.rain!==null&&r.rain>=1);
               const wetCount=arr=>arr.filter(wet).length;
-              const windText=arr=>{
-                const valid=arr.map(r=>r.wind).filter(Number.isFinite);
-                if(!valid.length)return '';
-                const min=Math.round(Math.min(...valid)),max=Math.round(Math.max(...valid));
-                if(max<4)return '';
-                return min===max?` De wind is ongeveer ${max} Bft.`:` De wind varieert van ${min} tot ${max} Bft.`;
-              };
               const a=first[0],b=first[1];
               const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
               const tomorrow=new Date(Date.parse(today+'T12:00:00Z')+86400000).toISOString().slice(0,10);
@@ -388,9 +382,9 @@ async def make_images() -> None:
               const rainiest=rest.filter(r=>r.rain!==null).sort((x,y)=>y.rain-x.rain)[0];
               const transition=`Vanaf ${day(rest[0].date)}`;
               const restWeather=wetRest>=2?`${transition} valt op meerdere dagen regen of komen buien voor.`:wetRest===1?`${transition} zijn er droge perioden, maar valt ook plaatselijk regen.`:`${transition} is het meestal droog.`;
-              const tempRest=restHi-restLo>=3?` De maxima liggen tussen ${rounded(restLo)} en ${rounded(restHi)} graden.`:'';
+              const tempRest=restHi-restLo>=1?` ${tempText(restLo,restHi)}`:'';
               const rainDetail=rainiest&&rainiest.rain>=10?` Vooral ${day(rainiest.date)} kan het flink regenen.`:'';
-              const p2=`${restWeather}${rainDetail}${tempRest}${windText(first)}`;
+              const p2=`${restWeather}${rainDetail}${tempRest}`;
               const laterWet=wetCount(later);
               const earlyLater=wetCount(later.slice(0,3));
               const lateLater=wetCount(later.slice(3));
@@ -401,7 +395,7 @@ async def make_images() -> None:
               else if(laterWet>=3)outlook='Ook daarna blijven regen en buien mogelijk.';
               else if(laterWet>=1)outlook='Verder vooruit wisselen droge perioden en enkele buien elkaar af.';
               else outlook='Verder vooruit lijkt het overwegend droog te blijven.';
-              const p3=`${outlook} De maxima liggen tussen ${rounded(lo(later))} en ${rounded(hi(later))} graden.`;
+              const p3=`${outlook} ${tempText(lo(later),hi(later))}`;
               const box=document.createElement('section');
               box.id='ricoExportRandstadNarrative';
               box.setAttribute('aria-label','Automatisch weerbericht Randstad');
