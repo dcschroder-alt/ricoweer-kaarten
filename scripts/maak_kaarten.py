@@ -375,7 +375,19 @@ async def make_images() -> None:
                   bewolkt:'blijft het bewolkt',
                   onbekend:'is het weer veranderlijk'})[k];
               };
-              const p1=`${label(a)} ${weather(a)}. Het wordt ${rounded(a.max)} graden. ${label(b)} ${weather(b)} en wordt het ${rounded(b.max)} graden.`;
+              // Vergelijk opeenvolgende dagmaxima en schrijf natuurlijk Nederlands.
+              // Geen dubbele 'het wordt 10 graden' bij gelijke temperaturen.
+              const ta=rounded(a.max),tb=rounded(b.max),delta=tb-ta;
+              const nextTemp=delta===0?`opnieuw ${tb} graden`:
+                delta===1?`met ${tb} graden iets zachter`:
+                delta===-1?`met ${tb} graden iets frisser`:
+                delta>=4?`met ${tb} graden duidelijk warmer`:
+                delta<=-4?`met ${tb} graden duidelijk kouder`:
+                delta>0?`met ${tb} graden warmer`:`met ${tb} graden kouder`;
+              const sameWeather=category(a)===category(b);
+              const nextWeather=sameWeather?`${label(b)} is het weerbeeld vergelijkbaar`:`${label(b)} ${weather(b)}`;
+              const p1=`${label(a)} ${weather(a)} en wordt het ${ta} graden. ${nextWeather}; ${nextTemp}.`;
+
               const rest=rows.slice(2,5);
               const restHi=hi(rest),restLo=lo(rest);
               const wetRest=wetCount(rest);
