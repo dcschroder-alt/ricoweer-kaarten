@@ -3,7 +3,7 @@ name: Ricoweer - kaarten voor WordPress
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 * * * *'
+    - cron: '23 * * * *'
 
 permissions:
   contents: read
