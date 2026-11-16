@@ -3,8 +3,7 @@ name: Ricoweer - kaarten voor WordPress
 on:
   workflow_dispatch:
   schedule:
-    # Elk uur van 05:00 t/m 22:00 Nederlandse tijd, plus 01:00.
-    - cron: '0 1,5-22 * * *'
+    - cron: '17 * * * *'
       timezone: 'Europe/Amsterdam'
 
 permissions:
