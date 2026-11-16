@@ -3,8 +3,7 @@ name: Ricoweer - kaarten voor WordPress
 on:
   workflow_dispatch:
   schedule:
-    # Elke uur van 05:00 t/m 22:00 Nederlandse tijd plus 01:00.
-    # GitHub kan scheduled runs vertragen of overslaan; geen harde garantie.
+    # Elk uur van 05:00 t/m 22:00 Nederlandse tijd, plus 01:00.
     - cron: '0 1,5-22 * * *'
       timezone: 'Europe/Amsterdam'
 
@@ -20,7 +19,7 @@ concurrency:
 jobs:
   publiceer:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 55
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -39,11 +38,34 @@ jobs:
           python -m playwright install chromium
       - name: Controleer exporter
         run: python -m py_compile scripts/maak_kaarten.py
-      - name: Genereer kaarten met de Ricoweer-dagmodelmix
-        run: python scripts/maak_kaarten.py
+      - name: Genereer kaarten met herstelpogingen
+        shell: bash
         env:
           SOURCE_MAP_URL: https://dcschroder-alt.github.io/Regioweer/weerkaart.html
           OUTPUT_DIR: public
+          MAX_WAIT_MS: '90000'
+          RETRY_WAIT_MS: '45000'
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "::group::Kaarten genereren - poging $attempt/3"
+            rm -rf public
+            if python scripts/maak_kaarten.py; then
+              echo "::endgroup::"
+              echo "Export gelukt in poging $attempt"
+              break
+            fi
+            echo "::endgroup::"
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Na drie pogingen geen volledige actuele modelscan. Bestaande Pages-deployment blijft behouden."
+              exit 1
+            fi
+            echo "Bron-API tijdelijk niet beschikbaar. Wacht 120 seconden en probeer met een nieuwe browsersessie opnieuw."
+            sleep 120
+          done
+          for file in morgen.png overmorgen.png widget.png randstad-5dagen.png randstad-10dagen-compact.png randstad-10dagen.png index.html; do
+            test -s "public/$file" || { echo "::error::Ontbrekend of leeg bestand: $file"; exit 1; }
+          done
       - name: Configureer GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload de PNG's
