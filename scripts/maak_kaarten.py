@@ -361,6 +361,14 @@ async def make_images() -> None:
   const brighter=r=>hasSun(r)?r.sun>=3:['zon','zonwolken'].includes(kind(r));
   const sunny=r=>hasSun(r)?r.sun>=5:kind(r)==='zon';
   const tempRange=arr=>{const v=arr.map(r=>round(r.max));const lo=Math.min(...v),hi=Math.max(...v);return lo===hi?`${lo} graden`:hi-lo===1?`${lo} of ${hi} graden`:`${lo} tot ${hi} graden`;};
+  // De widget schuift om 18:00 uur naar morgen. Bepaal de labels op
+  // basis van de werkelijke eerste rij, niet op basis van de exporttijd alleen.
+  const nlDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const todayISO=/^\d{4}-\d{2}-\d{2}$/.test(nlDate)?nlDate:(()=>{const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const get=t=>parts.find(p=>p.type===t)?.value;return `${get('year')}-${get('month')}-${get('day')}`;})();
+  const nextISO=new Date(Date.parse(todayISO+'T12:00:00Z')+86400000).toISOString().slice(0,10);
+  const firstLabel=rows[0].date===todayISO?'Vandaag':rows[0].date===nextISO?'Morgen':null;
+  if(!firstLabel)throw Error('Tekstcontrole: eerste dag valt niet op vandaag of morgen');
+  const secondLabel=firstLabel==='Vandaag'?'Morgen':'Overmorgen';
   const today=rows[0],tomorrow=rows[1];
   const clause=r=>{
     if(veryWet(r))return 'valt geregeld regen';
@@ -381,11 +389,11 @@ async def make_images() -> None:
     if(today.max>=9&&tomorrow.max>=7)return `met ${x} graden minder zacht`;
     return delta>=-2?`met ${x} graden iets frisser`:`met ${x} graden duidelijk frisser`;
   };
-  const todayText=`Vandaag ${clause(today)} en wordt het ${round(today.max)} graden.`;
-  const tomorrowText=(veryWet(today)&&veryWet(tomorrow))?'Morgen blijft het nat':
-    (wetScore(today)===wetScore(tomorrow)&&kind(today)===kind(tomorrow))?`Morgen ${clause(tomorrow)}`:
-    (wetScore(tomorrow)<wetScore(today))?`Morgen wordt het droger en ${clause(tomorrow)}`:
-    `Morgen ${clause(tomorrow)}`;
+  const todayText=`${firstLabel} ${clause(today)} en wordt het ${round(today.max)} graden.`;
+  const tomorrowText=(veryWet(today)&&veryWet(tomorrow))?`${secondLabel} blijft het nat`:
+    (wetScore(today)===wetScore(tomorrow)&&kind(today)===kind(tomorrow))?`${secondLabel} ${clause(tomorrow)}`:
+    (wetScore(tomorrow)<wetScore(today))?`${secondLabel} wordt het droger en ${clause(tomorrow)}`:
+    `${secondLabel} ${clause(tomorrow)}`;
   const p1=`${todayText} ${tomorrowText} en wordt het ${tempTomorrow()}.`;
   // Perioden vormen op basis van samenhangende dagwaarden, niet losse trefwoorden.
   // Dag 3-5: eerst aanhoudend nat benoemen, daarna het omslagmoment.
@@ -464,7 +472,7 @@ async def make_images() -> None:
   for(const str of texts){const p=document.createElement('p');p.textContent=str;p.style.cssText='margin:0 0 9px';box.appendChild(p);}
   box.lastElementChild.style.marginBottom='0';
   const firstRow=el.querySelector('.rico5DayRow');firstRow.parentNode.insertBefore(box,firstRow);
-  return {text:texts.join(' '),words:wordCount,firstType:today.type,firstCategory:kind(today)};
+  return {text:texts.join(' '),words:wordCount,firstType:today.type,firstCategory:kind(today),firstLabel,secondLabel};
 }""")
             # EC46: verse GitHub-browser heeft meestal geen localStorage-cache.
             # Gebruik de bestaande Ricoweer-functie; die hergebruikt cache indien aanwezig.
