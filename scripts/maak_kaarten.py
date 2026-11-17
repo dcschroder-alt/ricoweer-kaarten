@@ -320,129 +320,115 @@ async def make_images() -> None:
             # WordPress: zelfstandig Randstad-weerbericht BOVEN de tien dagregels.
             # De tekst wordt uitsluitend uit de reeds gecontroleerde regionale
             # dagrijen samengesteld: geen nieuwe API-calls of uurlijkse maxima.
+            # V10.3: dagwaarde-gedreven weertekst met omslagmomenten en taalcontrole.
             narrative = await forecast.evaluate(r"""el => {
-              const rows=[...el.querySelectorAll('.rico5DayRow')].map(r=>({
-                date:r.dataset.date, type:(r.dataset.type||'').toLowerCase(), visible:(r.innerText||'').toLowerCase(),
-                max:Number(r.dataset.max),min:Number(r.dataset.min),
-                rain:r.dataset.rain===''?null:Number(r.dataset.rain),
-                sun:r.dataset.sun===''?null:Number(r.dataset.sun),
-                wind:(()=>{const m=(r.innerText||'').match(/(?:^|\s)([0-9]|1[0-2])\s*Bft\b/i);return m?Number(m[1]):null;})()
-              }));
-              if(rows.length!==10 || rows.some(r=>!r.date||!Number.isFinite(r.max)))
-                throw new Error('Geen tien geldige dagwaarden voor Randstad-weerbericht');
-              const day=d=>new Intl.DateTimeFormat('nl-NL',{weekday:'long',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
-              const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
-              const rounded=n=>Math.round(n);
-              const tempText=(low,high)=>{const a=rounded(low),b=rounded(high);return a===b?`Het wordt ${a} graden.`:b-a<=1?`Het wordt ${a} of ${b} graden.`:`De maxima liggen tussen ${a} en ${b} graden.`;};
-              // Dagtype is leidend: dezelfde categorie als het dagsymbool.
-              // Absolute zonuren zijn GEEN zonpercentage; gebruik ze daarom
-              // niet als losse drempel voor een zonnig symbool.
-              const category=r=>{
-                // De zichtbare dagomschrijving is leidend als de interne typecode
-                // ontbreekt of een andere codering gebruikt.
-                const known=/onweer|sneeuw|regenachtig|regen|nat|bui|vrij zonnig|zonnig|veel zon|zon en wolken|half bewolkt|wisselend bewolkt|veel bewolking|weinig zon|geheel bewolkt|bewolkt|grijs/;
-                const t=known.test(r.type)?r.type:r.visible.split('\n').map(x=>x.trim()).find(x=>known.test(x))||r.type;
-                if(/onweer/.test(t))return 'onweer';
-                if(/sneeuw/.test(t))return 'sneeuw';
-                if(/regenachtig|regen|nat/.test(t))return 'regen';
-                if(/bui/.test(t))return 'buien';
-                if(/vrij zonnig/.test(t))return 'vrijzon';
-                if(/zonnig|veel zon/.test(t))return 'zon';
-                if(/zon en wolken|half bewolkt|wisselend bewolkt/.test(t))return 'zonwolken';
-                if(/veel bewolking|weinig zon/.test(t))return 'veelbewolking';
-                if(/geheel bewolkt|bewolkt|grijs/.test(t))return 'bewolkt';
-                if(/zon/.test(t))return 'zonwolken';
-                if(r.rain!==null&&r.rain>=2)return 'regen';
-                return 'onbekend';
-              };
-              const first=rows.slice(0,5),later=rows.slice(5);
-              const hi=arr=>Math.max(...arr.map(r=>r.max));
-              const lo=arr=>Math.min(...arr.map(r=>r.max));
-              const wet=r=>['onweer','sneeuw','regen','buien'].includes(category(r))||(r.rain!==null&&r.rain>=1);
-              const dry=r=>!wet(r) && (r.rain===null || r.rain<1);
-              const sunny=r=>['zon','vrijzon','zonwolken'].includes(category(r));
-              const a=rows[0],b=rows[1];
-              const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-              const tomorrow=new Date(Date.parse(today+'T12:00:00Z')+86400000).toISOString().slice(0,10);
-              const label=r=>r.date===today?'Vandaag':r.date===tomorrow?'Morgen':cap(day(r.date));
-              const weather=r=>({onweer:'is er kans op onweer',sneeuw:'kan sneeuw vallen',regen:'valt geregeld regen',buien:'komen enkele buien voor',zon:'is het zonnig en droog',vrijzon:'schijnt de zon flink',zonwolken:'wisselen zon en wolken elkaar af',veelbewolking:'is het vaak bewolkt met soms wat zon',bewolkt:'blijft het bewolkt',onbekend:'is het weer veranderlijk'})[category(r)];
-              const ta=rounded(a.max),tb=rounded(b.max),delta=tb-ta;
-              const nextTemp=delta===0?`opnieuw ${tb} graden`:delta===1?`met ${tb} graden iets zachter`:delta===-1?`met ${tb} graden iets frisser`:delta>=4?`met ${tb} graden duidelijk warmer`:delta<=-4?`met ${tb} graden duidelijk kouder`:delta>0?`met ${tb} graden warmer`:`met ${tb} graden kouder`;
-              const kA=category(a),kB=category(b);
-              let nextWeather;
-              if(kA===kB){
-                nextWeather=wet(b)?`${label(b)} blijft het ${kB==='regen'?'nat':'buienachtig'}`:sunny(b)?`${label(b)} blijft de zon geregeld te zien`:`${label(b)} verandert het weerbeeld weinig`;
-              }else nextWeather=`${label(b)} ${weather(b)}`;
-              const p1=`${label(a)} ${weather(a)} en wordt het ${ta} graden. ${nextWeather}; ${nextTemp}.`;
-
-              // Beschrijf de omslag met gecontroleerde dagwaarden: geen verzonnen kanspercentages.
-              const mid=rows.slice(2,5);
-              const midWet=mid.filter(wet).length;
-              const midDry=mid.filter(dry).length;
-              const earlyWet=rows.slice(0,3).filter(wet).length;
-              const midSunny=mid.filter(sunny).length;
-              const rainiest=mid.filter(r=>r.rain!==null).sort((x,y)=>y.rain-x.rain)[0];
-              let midText;
-              if(earlyWet>=2 && midDry>=2 && midSunny>=1)midText=`Vanaf ${day(mid[0].date)} wordt het geleidelijk droger en komt de zon vaker tevoorschijn.`;
-              else if(midWet>=2 && midSunny>=1)midText=`Vanaf ${day(mid[0].date)} blijft het wisselvallig, al breekt de zon tussendoor door.`;
-              else if(midWet>=2)midText=`Vanaf ${day(mid[0].date)} blijft het op meerdere dagen nat.`;
-              else if(midDry>=2 && midSunny>=1)midText=`Vanaf ${day(mid[0].date)} volgen drogere perioden met geregeld zon.`;
-              else midText=`Vanaf ${day(mid[0].date)} wisselen droge perioden en neerslag elkaar af.`;
-              const bestSun=mid.filter(r=>sunny(r)&&Number.isFinite(r.sun)).sort((x,y)=>y.sun-x.sun)[0];
-              const sunDetail=bestSun&&bestSun.sun>=4?` Vooral ${day(bestSun.date)} is er ruimte voor de zon.`:'';
-              const rainDetail=rainiest&&rainiest.rain>=10?` ${cap(day(rainiest.date))} kan flink wat regen vallen.`:'';
-              const midTemp=hi(mid)-lo(mid)>=2?` De maxima liggen tussen ${rounded(lo(mid))} en ${rounded(hi(mid))} graden.`:'';
-              const p2=midText+sunDetail+rainDetail+midTemp;
-
-              const lateWet=later.filter(wet).length,lateSun=later.filter(sunny).length;
-              const trend=rounded(hi(later))-rounded(hi(first));
-              const lateLo=rounded(lo(later)),lateHi=rounded(hi(later));
-              const lateTemp=lateLo===lateHi?`${lateHi} graden`:lateHi-lateLo===1?`${lateLo} of ${lateHi} graden`:`${lateLo} tot ${lateHi} graden`;
-              let lateWeather=lateWet>=4?'Ook verder vooruit zijn er regelmatig buien of perioden met regen.':lateWet>=2&&lateSun>=2?'Verder vooruit wisselen zonnige perioden en buien elkaar af.':lateWet>=2?'Verder vooruit blijft neerslag mogelijk.':lateSun>=2?'Verder vooruit is er geregeld zon en blijft het vaak droog.':'Verder vooruit blijft het weer wisselvallig.';
-              const lateTrend=trend<=-3?'Het wordt geleidelijk kouder':trend>=3?'Het wordt geleidelijk zachter':'De maxima liggen dan';
-              let p3=`${lateWeather} ${trend<=-3||trend>=3?lateTrend+' met maxima van '+lateTemp:'De maxima liggen dan rond '+lateTemp}.`;
-              // Alleen bij een daadwerkelijke dagminimumverwachting rond het vriespunt.
-              const cold=rows.slice(2).filter(r=>Number.isFinite(r.min)&&r.min<=2);
-              if(cold.length){
-                const minValue=rounded(Math.min(...cold.map(r=>r.min)));
-                if(minValue<=0)p3+=` In de koudste nachten is plaatselijk nachtvorst mogelijk.`;
-                else p3+=` In de koudste nachten daalt de temperatuur tot rond ${minValue} ${minValue===1?'graad':'graden'}.`;
-              }
-              // De bestaande kaart bevat al een samenvatting; vervang uitsluitend de tekst,
-              // niet de dagrijen of de bronvermelding.
-              const summary=el.querySelector('.rico5DaySummary');
-              if(summary){
-                const summaryTrend=rounded(hi(later))<=rounded(hi(first))-3?'Later wordt het kouder.':rounded(lo(later))>=rounded(lo(first))+3?'Later wordt het zachter.':'';
-                const summaryWeather=midDry>=2&&midSunny>=1?'Na de natte start volgen drogere perioden met meer zon.':lateWet>=3?'Ook later blijft neerslag mogelijk.':'Er zijn afwisselend droge en natte perioden.';
-                summary.textContent=`${summaryWeather} ${summaryTrend} Maxima verder vooruit ${lateTemp}.`.trim();
-              }
-              // Maak de zichtbare technische voetregel kort, maar laat de OSM-attributie staan.
-              for(const node of el.querySelectorAll('div,p,small,span')){
-                if(node.children.length===0 && /Regionale dagmodelmix|Dag- en uurwaarden blijven gescheiden/i.test(node.textContent||'')){
-                  const scan=el.dataset.scanSavedAt;
-                  let stamp='';
-                  if(scan){const d=new Date(Number(scan));if(!isNaN(d))stamp=new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}).format(d);}
-                  if(!stamp){const m=(node.textContent||'').match(/scan\s+([^·]+)/i);if(m)stamp=m[1].trim();}
-                  node.textContent=`Laatste update: ${stamp||'actuele modelscan'} · Kaart © OpenStreetMap-bijdragers`;
-                }
-              }
-              const box=document.createElement('section');
-              box.id='ricoExportRandstadNarrative';
-              box.setAttribute('aria-label','Automatisch weerbericht Randstad');
-              box.style.cssText='box-sizing:border-box;margin:9px 8px 12px;padding:14px 15px;background:#e6f2fa;border:1px solid #bfdbe9;border-radius:12px;color:#17445f;font:15px/1.52 Arial,sans-serif;overflow-wrap:break-word;';
-              const title=document.createElement('div');
-              title.textContent='Weerbericht Randstad';
-              title.style.cssText='font-size:19px;line-height:1.25;font-weight:800;margin-bottom:9px;color:#07527a';
-              box.appendChild(title);
-              for(const text of [p1,p2,p3]){
-                const p=document.createElement('p');p.textContent=text;
-                p.style.cssText='margin:0 0 9px';box.appendChild(p);
-              }
-              box.lastElementChild.style.marginBottom='0';
-              const firstRow=el.querySelector('.rico5DayRow');
-              firstRow.parentNode.insertBefore(box,firstRow);
-              return {text:[p1,p2,p3].join(' '),words:[p1,p2,p3].join(' ').split(/\s+/).length, firstType:a.type,firstVisible:a.visible.slice(0,120),firstCategory:category(a)};
-            }""")
+  const rows=[...el.querySelectorAll('.rico5DayRow')].map(node=>{
+    const v=k=>node.dataset[k];
+    const num=k=>v(k)==null||v(k)===''?null:Number(v(k));
+    const description=(node.innerText||'').split('\n').map(x=>x.trim()).find(x=>/onweer|sneeuw|regenachtig|regen|buien|bui|zon|bewolk|grijs|mist|droog/i.test(x))||'';
+    return {date:v('date'),type:(v('type')||description).toLowerCase(),max:num('max'),min:num('min'),rain:num('rain'),sun:num('sun')};
+  });
+  if(rows.length!==10||rows.some(r=>!/^\d{4}-\d\d-\d\d$/.test(r.date)||!Number.isFinite(r.max)))throw Error('Onvolledige dagwaarden voor weerbericht');
+  const nl=new Intl.DateTimeFormat('nl-NL',{weekday:'long',timeZone:'UTC'});
+  const day=r=>nl.format(new Date(r.date+'T12:00:00Z'));
+  const upper=s=>s[0].toUpperCase()+s.slice(1);
+  const t=n=>Math.round(n);
+  const category=r=>{
+    const s=r.type;
+    if(/onweer/.test(s))return 'onweer';
+    if(/sneeuw/.test(s))return 'sneeuw';
+    if(/regenachtig|regen/.test(s))return 'regen';
+    if(/bui/.test(s))return 'buien';
+    if(/vrij zonnig|veel zon/.test(s))return 'zonnig';
+    if(/zon en wolken|half bewolkt|wisselend bewolkt|zon/.test(s))return 'zonwolken';
+    if(/veel bewolking|weinig zon|bewolkt|grijs/.test(s))return 'bewolkt';
+    if(r.rain!==null&&r.rain>=5)return 'regen';
+    return 'onbekend';
+  };
+  const rain=r=>Number.isFinite(r.rain)?r.rain:null;
+  const wet=r=>['regen','buien','onweer','sneeuw'].includes(category(r))||(rain(r)!==null&&rain(r)>=2);
+  const bright=r=>['zonnig','zonwolken'].includes(category(r));
+  const drier=(a,b)=>rain(a)!==null&&rain(b)!==null&&rain(b)<=Math.max(1,rain(a)*.4);
+  const tempRange=arr=>{const vals=arr.map(r=>t(r.max)),lo=Math.min(...vals),hi=Math.max(...vals);return lo===hi?`${lo} graden`:hi-lo===1?`${lo} of ${hi} graden`:`${lo} tot ${hi} graden`;};
+  const a=rows[0],b=rows[1],first=rows.slice(0,5),mid=rows.slice(2,5),later=rows.slice(5);
+  const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const tomorrow=new Date(Date.parse(today+'T12:00:00Z')+86400000).toISOString().slice(0,10);
+  const label=r=>r.date===today?'Vandaag':r.date===tomorrow?'Morgen':upper(day(r));
+  const clause=r=>({onweer:'is er kans op onweer',sneeuw:'kan sneeuw vallen',regen:'valt geregeld regen',buien:'komen enkele buien voor',zonnig:'is het zonnig',zonwolken:'zijn er perioden met zon',bewolkt:'overheerst de bewolking',onbekend:'is het weer wisselend'})[category(r)];
+  const change=t(b.max)-t(a.max);
+  const softness=x=>x>=10;
+  const trendWord=()=>{
+    if(change===0)return `opnieuw ${t(b.max)} graden`;
+    if(change>0)return change===1?`met ${t(b.max)} graden iets zachter`:change>=4?`met ${t(b.max)} graden duidelijk zachter`:`met ${t(b.max)} graden zachter`;
+    if(softness(a.max)&&softness(b.max))return change>=-2?`met ${t(b.max)} graden iets minder zacht`:`met ${t(b.max)} graden minder zacht`;
+    if(change===-1)return `met ${t(b.max)} graden iets frisser`;
+    return change<=-4?`met ${t(b.max)} graden duidelijk kouder`:`met ${t(b.max)} graden frisser`;
+  };
+  let tomorrowWeather;
+  if(category(a)===category(b)){
+    tomorrowWeather=wet(b)?`${label(b)} blijft het ${category(b)==='regen'?'nat':'wisselvallig'}`:bright(b)?`${label(b)} blijft de zon geregeld te zien`:`${label(b)} blijft de bewolking overheersen`;
+  }else tomorrowWeather=`${label(b)} ${clause(b)}`;
+  const p1=`${label(a)} ${clause(a)} en wordt het ${t(a.max)} graden. ${tomorrowWeather}; ${trendWord()}.`;
+  // Zoek de eerste overtuigende omslag in dag 3-5. Dagwaarden en dagsymbolen blijven leidend.
+  let p2='';
+  const transition=mid.find((r,i)=>{
+    const prev=rows[i+1];
+    return (wet(prev)&&bright(r)&&drier(prev,r))||(!bright(prev)&&bright(r)&&!wet(r));
+  });
+  const brightMid=mid.filter(bright);
+  const heavyMid=mid.filter(r=>rain(r)!==null&&rain(r)>=10);
+  const wetMid=mid.filter(wet);
+  if(transition){
+    p2=`Vanaf ${day(transition)} wordt het ${drier(rows[rows.indexOf(transition)-1],transition)?'droger en komt de zon vaker tevoorschijn':'vriendelijker met meer ruimte voor de zon'}.`;
+  }else if(wetMid.length>=2){
+    p2=`Ook ${day(mid[0])} en de dagen daarna blijft het wisselvallig.`;
+  }else if(brightMid.length>=2){
+    p2=`Vanaf ${day(mid[0])} zijn er vaker droge perioden met zon.`;
+  }else p2=`Vanaf ${day(mid[0])} wisselen bewolking en droge perioden elkaar af.`;
+  if(heavyMid.length){const r=heavyMid.sort((x,y)=>y.rain-x.rain)[0];p2+=` Vooral ${day(r)} kan flink wat regen vallen.`;}
+  const good=brightMid.filter(r=>rain(r)===null||rain(r)<=2);
+  if(good.length && !transition){p2+=` ${upper(day(good[0]))} biedt meer ruimte voor de zon.`;}
+  const firstAvg=first.reduce((n,r)=>n+r.max,0)/first.length;
+  const lateAvg=later.reduce((n,r)=>n+r.max,0)/later.length;
+  const lateWet=later.filter(wet).length,lateBright=later.filter(bright).length;
+  let lateWeather=lateWet>=4?'Verder vooruit blijft het wisselvallig.':lateBright>=3?'Verder vooruit zijn er geregeld perioden met zon.':lateWet>=2?'Verder vooruit blijven enkele buien mogelijk.':'Verder vooruit zijn er ook droge perioden.';
+  const lateRange=tempRange(later);
+  const diff=lateAvg-firstAvg;
+  let lateTemperature=diff<=-3?`Het wordt geleidelijk minder zacht, met maxima van ${lateRange}.`:diff>=3?`Het wordt geleidelijk zachter, met maxima van ${lateRange}.`:`De maxima liggen dan rond ${lateRange}.`;
+  if(lateRange.includes(' tot '))lateTemperature=lateTemperature.replace('rond ','tussen ').replace(' tot ',' en ');
+  let p3=`${lateWeather} ${lateTemperature}`;
+  const cold=rows.slice(2).filter(r=>Number.isFinite(r.min));
+  const lowest=cold.length?Math.min(...cold.map(r=>r.min)):null;
+  if(lowest!==null&&lowest<=0)p3+=' Tijdens de koudste nachten is lokaal lichte nachtvorst mogelijk.';
+  else if(lowest!==null&&lowest<=2)p3+=` In de koudste nachten daalt de temperatuur tot rond ${t(lowest)} ${t(lowest)===1?'graad':'graden'}.`;
+  const summary=el.querySelector('.rico5DaySummary');
+  if(summary){
+    const lateDry=later.filter(r=>rain(r)!==null&&rain(r)<1).length;
+    const weatherSummary=lateDry>=3?'Verder vooruit zijn er meerdere droge dagen.':lateWet>=3?'Ook verder vooruit blijft de kans op neerslag aanwezig.':'Verder vooruit wisselen droge perioden en buien elkaar af.';
+    const shift=diff<=-3?'De middagtemperatuur daalt geleidelijk.':diff>=3?'De middagtemperatuur loopt geleidelijk op.':'';
+    summary.textContent=`${weatherSummary} ${shift}`.trim();
+  }
+  for(const node of el.querySelectorAll('div,p,small,span')){
+    if(node.children.length===0&&/Regionale dagmodelmix|Dag- en uurwaarden blijven gescheiden/i.test(node.textContent||'')){
+      const scan=el.dataset.scanSavedAt;
+      let stamp='';if(scan){const d=new Date(Number(scan));if(!isNaN(d))stamp=new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}).format(d);}
+      if(!stamp){const m=(node.textContent||'').match(/scan\s+([^·]+)/i);if(m)stamp=m[1].trim();}
+      node.textContent=`Laatste update: ${stamp||'actuele modelscan'} · Kaart © OpenStreetMap-bijdragers`;
+    }
+  }
+  const texts=[p1,p2,p3];
+  if(texts.some(x=>/undefined|NaN|null|  |\.\./.test(x)))throw Error('Tekstcontrole: ongeldige waarde');
+  if(/\bmet \d+ graden kouder\b/.test(p1)&&softness(a.max)&&softness(b.max))throw Error('Tekstcontrole: onjuiste temperatuurnuance');
+  const wordCount=texts.join(' ').trim().split(/\s+/).length;
+  if(wordCount<35||wordCount>145)throw Error('Tekstcontrole: lengte '+wordCount);
+  const box=document.createElement('section');box.id='ricoExportRandstadNarrative';box.setAttribute('aria-label','Automatisch weerbericht Randstad');
+  box.style.cssText='box-sizing:border-box;margin:9px 8px 12px;padding:14px 15px;background:#e6f2fa;border:1px solid #bfdbe9;border-radius:12px;color:#17445f;font:15px/1.52 Arial,sans-serif;overflow-wrap:break-word;';
+  const heading=document.createElement('div');heading.textContent='Weerbericht Randstad';heading.style.cssText='font-size:19px;line-height:1.25;font-weight:800;margin-bottom:9px;color:#07527a';box.appendChild(heading);
+  for(const str of texts){const p=document.createElement('p');p.textContent=str;p.style.cssText='margin:0 0 9px';box.appendChild(p);}
+  box.lastElementChild.style.marginBottom='0';
+  const firstRow=el.querySelector('.rico5DayRow');firstRow.parentNode.insertBefore(box,firstRow);
+  return {text:texts.join(' '),words:wordCount,firstType:a.type,firstCategory:category(a)};
+}""")
             # EC46: verse GitHub-browser heeft meestal geen localStorage-cache.
             # Gebruik de bestaande Ricoweer-functie; die hergebruikt cache indien aanwezig.
             ec46 = await widget_page.evaluate(r"""async () => {
