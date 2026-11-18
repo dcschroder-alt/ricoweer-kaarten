@@ -618,13 +618,15 @@ async def make_images() -> None:
                  (node.innerText||'').replace(/\s*\n\s*/g,' · ').replace(/\s+/g,' ').trim());
               const confidence=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')].map(node=>{
                  const c=node.querySelector('.rico5DayConfidence');
-                 return c?`${node.dataset.date.slice(5)}: ${c.textContent.replace('🎯 ','').trim()}`:'';
+                 const range=node.querySelector('.rico5DayRange');
+                 const reason=node.querySelector('.rico5DayReason');
+                 return c?`${node.dataset.date.slice(5)}: ${range?.textContent.trim()||''} · ${c.textContent.replace('🎯 ','').trim()} · ${reason?.textContent.trim()||''}`:'';
               }).filter(Boolean);
               if(risks.length!==5||confidence.length!==10)
                  throw new Error('Kansenblok of dagelijkse modelzekerheid ontbreekt bij PNG-compositie');
               lines.push(wrap('Weerkansen · hoogste modelondersteuning in 10 dagen'));
               for(const r of risks)lines.push(wrap(r));
-              lines.push(wrap('Modelzekerheid per dag:'));
+              lines.push(wrap('Modelrange maxima en belangrijkste onzekerheid per dag:'));
               for(let i=0;i<confidence.length;i+=2)lines.push(wrap(confidence.slice(i,i+2).join('  |  ')));
               lines.push(wrap('Modelondersteuning is geen gekalibreerde ensemblekans; onbeschikbare waarden niet als 0%.'));
               const headingHeight=Math.round(58*scale);
