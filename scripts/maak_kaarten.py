@@ -110,10 +110,9 @@ WIDGET_VALIDATED_JS = """({cacheKey, date, maxAge, minPts}) => {
  if(!day||day.pts.filter(p=>Number.isFinite(p.tx)&&Number.isFinite(p.tn)).length<minPts)return false;
  const card=document.querySelector('#ricoLiveShell #ricoWeatherAtlas .ricoWeatherGrid > .ricoWeatherCard:first-child');
  const rows=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')];
- const dates=Array.from({length:15},(_,i)=>new Date(Date.parse(start+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
+ const dates=Array.from({length:10},(_,i)=>new Date(Date.parse(start+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
  return !!card&&card.querySelectorAll('.ricoWeatherPin').length>=7 &&
-        rows.length===15 && rows.every((r,i)=>r.dataset.date===dates[i] &&
-          Number.isFinite(Number(r.dataset.max)) && Number.isFinite(Number(r.dataset.min))) &&
+        rows.length===10 && rows.every((r,i)=>r.dataset.date===dates[i]) &&
         !!document.querySelector('#ricoWidgetFacts .rico5DaySummary') &&
         document.querySelector('.ricoWidgetMode')!==null;
 }"""
@@ -137,70 +136,6 @@ QUALITY_JS = """el => {
  return {tiles: loaded.length, pins:map?.querySelectorAll('.ricoWeatherPin').length||0,
          width:Math.round(rect?.width||0),height:Math.round(rect?.height||0)};
 }"""
-
-
-
-# Bij problemen met de 15-daagse mogen de twee actuele landelijke kaarten
-# zelfstandig gepubliceerd worden. De oude regionale PNG's kunnen worden
-# meegenomen als EERDER GEPUBLICEERDE bestanden, zonder nieuwe tijdstempel.
-REGIONAL_NAMES = (
-    'widget.png', 'randstad-5dagen.png', 'randstad-10dagen-compact.png',
-    'randstad-10dagen.png', 'randstad-15dagen-compact.png', 'randstad-15dagen.png',
-)
-
-
-def fetch_previous_regionals(output: Path) -> list[str]:
-    import struct
-    from urllib.parse import urljoin
-    from urllib.request import Request, urlopen
-
-    base = os.environ.get('PUBLISHED_PAGES_URL',
-        'https://dcschroder-alt.github.io/ricoweer-kaarten/').rstrip('/') + '/'
-    restored = []
-    # Alleen uit eerder gepubliceerde locaties: geen verzonnen weerswaarden.
-    for name in REGIONAL_NAMES:
-        try:
-            req = Request(urljoin(base, name), headers={
-                'User-Agent': 'Ricoweer-Regional-Fallback/1.0', 'Cache-Control': 'no-cache'})
-            with urlopen(req, timeout=12) as res:
-                if res.status != 200 or not res.headers.get('Content-Type', '').lower().startswith('image/png'):
-                    raise ValueError('Geen PNG-respons')
-                data = res.read(12 * 1024 * 1024 + 1)
-            if not (20000 <= len(data) <= 12 * 1024 * 1024) or data[:8] != b'\x89PNG\r\n\x1a\n':
-                raise ValueError('Ongeldige PNG of bestandsgrootte')
-            w, h = struct.unpack('>II', data[16:24])
-            if w < 350 or h < 250:
-                raise ValueError('Afbeelding te klein')
-            (output / name).write_bytes(data)
-            restored.append(name)
-            print(f'Bestaande regionale afbeelding behouden: {name} ({w}x{h}); NIET vernieuwd.', flush=True)
-        except Exception as exc:
-            print(f'Waarschuwing: oude regionale afbeelding {name} niet beschikbaar: {exc}', flush=True)
-    return restored
-
-
-def write_landing(output: Path, regionals: list[str], old: bool = False) -> None:
-    import html
-    rows = [('<h2>Randstad · 15 dagen</h2>', 'randstad-15dagen.png'),
-            ('<h2>Randstad · 15 dagen compact</h2>', 'randstad-15dagen-compact.png'),
-            ('<h2>Randstad · bestaande afbeelding</h2>', 'randstad-10dagen.png'),
-            ('<h2>Randstad · bestaand compact overzicht</h2>', 'randstad-10dagen-compact.png'),
-            ('<h2>Morgenkaart met Randstad</h2>', 'widget.png')]
-    imgs = ''.join(f'{label}<img src="{html.escape(name)}" alt="{html.escape(name)}">'
-                   for label, name in rows if name in regionals)
-    notice = ('<p><strong>Let op:</strong> de Randstad-afbeeldingen zijn overgenomen uit de laatste '
-              'beschikbare publicatie. Alleen de landelijke kaarten zijn vernieuwd. '
-              'Controleer de datum in de Randstad-afbeeldingen.</p>') if old else ''
-    content = """<!doctype html><html lang="nl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ricoweer weerkaarten</title>
-<style>body{max-width:920px;margin:20px auto;padding:0 12px;font:16px system-ui,sans-serif;background:#f2f7fb;color:#173b56}h1{font-size:24px}img{max-width:100%;height:auto;display:block;margin:20px auto;border-radius:12px}</style>
-</head><body><h1>Ricoweer weerkaarten</h1>
-<p>Landelijke weersverwachting voor morgen en overmorgen.</p>
-<img src="morgen.png" alt="Landelijke verwachting morgen">
-<img src="overmorgen.png" alt="Landelijke verwachting overmorgen">
-""" + notice + imgs + '</body></html>'
-    (output / 'index.html').write_text(content, encoding='utf-8')
 
 
 async def make_images() -> None:
@@ -332,404 +267,384 @@ async def make_images() -> None:
                 if destination.stat().st_size < 65000:
                     raise RuntimeError(f"PNG {filename} lijkt leeg.")
                 print(f"PNG gemaakt: {destination.name} ({destination.stat().st_size} bytes)", flush=True)
-            regional_ok = False
-            try:
-                # Extra WordPress-zijbalkkaart met vijfdaagse Randstadverwachting. Daggegevens komen uit exact dezelfde
-                # landelijke modelmix; geen dagmaxima uit uurverwachtingen afleiden.
-                # Ook dit bestand pas publiceerbaar maken na inhoudelijke/visuele controle.
-                from urllib.parse import urlparse, urlunparse
-                source_parts=urlparse(SOURCE)
-                if not source_parts.path.endswith('/weerkaart.html'):
-                    raise RuntimeError('SOURCE_MAP_URL moet eindigen op /weerkaart.html')
-                widget_source=urlunparse(source_parts._replace(
-                    path=source_parts.path[:-len('weerkaart.html')]+'widgetkaart.html',
-                    query=f'publicatie={int(datetime.now().timestamp()*1000)}'))
-                # De landelijke kaart is al inhoudelijk gevalideerd. Deel exact deze
-                # modelmix met de widget (zelfde oorsprong, zelfde browsersessie).
-                # Zo wordt de widget niet afhankelijk van een tweede API-scan.
-                validated_scan = await page.evaluate("key => localStorage.getItem(key)", SCAN_KEY)
-                if not validated_scan:
-                    raise RuntimeError('Gevalideerde landelijke scan niet meer beschikbaar.')
-                widget_page=await context.new_page()
-                await widget_page.add_init_script("""(() => {
-                  const data = __SCAN_DATA__;
-                  try { localStorage.setItem(data.key, data.payload); } catch(e) {}
-                })();""".replace('__SCAN_DATA__', json.dumps({'key': SCAN_KEY, 'payload': validated_scan})))
-                widget_response=await widget_page.goto(widget_source, wait_until='domcontentloaded',timeout=55000)
-                if not widget_response or not widget_response.ok:
-                    raise RuntimeError(f'Compacte bronpagina widgetkaart.html niet bereikbaar ({widget_response.status if widget_response else "geen reactie"}).')
-                for attempt in range(2):
-                    try:
-                        await widget_page.wait_for_function(WIDGET_VALIDATED_JS,
-                            arg={'cacheKey':SCAN_KEY,'date':expected[0],'maxAge':MAX_AGE_MS,'minPts':MIN_POINTS},
-                            timeout=min(MAX_WAIT_MS, 60000) if attempt == 0 else min(RETRY_WAIT_MS, 40000),polling=1300)
-                        print(f"Randstad-widget compleet (poging {attempt + 1}).", flush=True)
-                        break
-                    except PlaywrightTimeoutError as exc:
-                        debug=await widget_page.evaluate(DEBUG_JS,SCAN_KEY)
-                        print(f'Widgetdiagnose poging {attempt + 1}:',json.dumps(debug,ensure_ascii=False),flush=True)
-                        if attempt == 1:
-                            raise RuntimeError('Widgetpagina heeft na twee pogingen onvoldoende actuele dagmodelmix of kaartpunten.') from exc
-                        print('Herstart widgetpagina voor nieuwe modelscan...',flush=True)
-                        await widget_page.reload(wait_until='domcontentloaded',timeout=55000)
-                widget_stamp=await widget_page.evaluate("key => JSON.parse(localStorage.getItem(key)||'null')?.savedAt",SCAN_KEY)
-                if int(widget_stamp or 0)!=int(info['savedAt']):
-                    raise RuntimeError('Widget gebruikt een andere scan dan de landelijke kaarten.')
-                widget=widget_page.locator('#ricoLiveShell')
-                await widget.scroll_into_view_if_needed()
-                await widget_page.wait_for_timeout(1600)
-                quality=await widget.locator('.ricoWeatherCard:first-child').evaluate(QUALITY_JS)
-                facts=await widget_page.locator('#ricoWidgetFacts .rico5DayRow').count()
-                size=await widget.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
-                print('WordPress-zijbalkkaart:',quality,'facts:',facts,'grootte:',size,flush=True)
-                if quality['tiles']<7 or quality['pins']<7 or quality['width']<430 or quality['height']<560 or facts!=15 or size['w']<450:
-                    raise RuntimeError('De widget is onvolledig; huidige gepubliceerde afbeeldingen blijven behouden.')
-                widget_destination=OUT/'widget.png'
-                await widget.screenshot(path=str(widget_destination),type='png',animations='disabled',timeout=50000)
-                if widget_destination.stat().st_size<45000:
-                    raise RuntimeError('Randstad-widget PNG lijkt leeg; publicatie gestopt.')
-                print(f'Widget gemaakt: {widget_destination.name} ({widget_destination.stat().st_size} bytes)',flush=True)
-                # Extra compacte tiendaagse zonder de grote landkaart. Deze versie past
-                # in de smalle WordPress-widgetbalk. Exact dezelfde regionale dagmix.
-                forecast=widget_page.locator('#ricoWidgetFacts')
-                if await forecast.locator('.rico5DayRow').count()!=15:
-                    raise RuntimeError('Randstad 15-daagse onvolledig: publicatie gestopt.')
-                forecast_size=await forecast.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
-                if forecast_size['w']<400 or forecast_size['h']<250:
-                    raise RuntimeError('Randstad overzicht te klein; publicatie gestopt: '+str(forecast_size))
-                # WordPress: zelfstandig Randstad-weerbericht BOVEN de tien dagregels.
-                # De tekst wordt uitsluitend uit de reeds gecontroleerde regionale
-                # dagrijen samengesteld: geen nieuwe API-calls of uurlijkse maxima.
-                # V10.4: periodeanalyse met gevalideerde omslagmomenten en natuurlijkere tekst.
-                narrative = await forecast.evaluate(r"""el => {
-      const rows=[...el.querySelectorAll('.rico5DayRow')].map(node=>{
-        const v=k=>node.dataset[k];
-        const num=k=>v(k)==null||v(k)===''?null:Number(v(k));
-        const description=(node.innerText||'').split('\n').map(x=>x.trim()).find(x=>/onweer|sneeuw|regenachtig|regen|buien|bui|zon|bewolk|grijs|mist|droog/i.test(x))||'';
-        return {date:v('date'),type:(v('type')||description).toLowerCase(),max:num('max'),min:num('min'),rain:num('rain'),sun:num('sun')};
-      });
-      if(rows.length!==15||rows.some(r=>!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(r.date)||!Number.isFinite(r.max)))throw Error('Onvolledige dagwaarden voor weerbericht');
-      const day=r=>new Intl.DateTimeFormat('nl-NL',{weekday:'long',timeZone:'UTC'}).format(new Date(r.date+'T12:00:00Z'));
-      const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
-      const round=n=>Math.round(n);
-      const hasRain=r=>Number.isFinite(r.rain);
-      const hasSun=r=>Number.isFinite(r.sun);
-      const kind=r=>{
-        const s=r.type;
-        if(/onweer/.test(s))return 'onweer';
-        if(/sneeuw/.test(s))return 'sneeuw';
-        if(/regenachtig|regen/.test(s))return 'regen';
-        if(/bui/.test(s))return 'buien';
-        if(/zonnig|veel zon/.test(s))return 'zon';
-        if(/zon/.test(s))return 'zonwolken';
-        if(/bewolk|grijs/.test(s))return 'bewolkt';
-        return 'onbekend';
-      };
-      // Neerslaghoeveelheid en dagsymbool samen beoordelen. Een bui-icoon met
-      // 0,6 mm is geen langdurig natte dag; 9 mm regen evenmin een droge dag.
-      const wetScore=r=>{
-        if(hasRain(r)){
-          if(r.rain>=8)return 3;
-          if(r.rain>=3)return 2;
-          if(r.rain>=1)return 1;
-          return 0;
-        }
-        return kind(r)==='regen'?2:['buien','onweer','sneeuw'].includes(kind(r))?1:0;
-      };
-      const dry=r=>wetScore(r)===0;
-      const veryWet=r=>wetScore(r)>=2;
-      const brighter=r=>hasSun(r)?r.sun>=3:['zon','zonwolken'].includes(kind(r));
-      const sunny=r=>hasSun(r)?r.sun>=5:kind(r)==='zon';
-      const tempRange=arr=>{const v=arr.map(r=>round(r.max));const lo=Math.min(...v),hi=Math.max(...v);return lo===hi?`${lo} graden`:hi-lo===1?`${lo} of ${hi} graden`:`${lo} tot ${hi} graden`;};
-      const today=rows[0],tomorrow=rows[1];
-      const clause=r=>{
-        if(veryWet(r))return 'valt geregeld regen';
-        if(kind(r)==='onweer')return 'komen buien voor, mogelijk met onweer';
-        if(kind(r)==='sneeuw')return 'kan sneeuw vallen';
-        if(wetScore(r)===1)return sunny(r)?'zijn er zonnige perioden en enkele buien':'komen enkele buien voor';
-        if(sunny(r))return 'schijnt de zon flink';
-        if(brighter(r))return 'zijn er perioden met zon';
-        if(kind(r)==='bewolkt')return 'overheerst de bewolking';
-        return 'is het overwegend droog';
-      };
-      const delta=round(tomorrow.max)-round(today.max);
-      const tempTomorrow=()=>{
-        const x=round(tomorrow.max);
-        if(delta===0)return `opnieuw ${x} graden`;
-        if(delta>0)return delta<=2?`met ${x} graden iets zachter`:`met ${x} graden duidelijk zachter`;
-        if(today.max>=10&&tomorrow.max>=10)return delta>=-2?`met ${x} graden iets minder zacht`:`met ${x} graden minder zacht`;
-        if(today.max>=9&&tomorrow.max>=7)return `met ${x} graden minder zacht`;
-        return delta>=-2?`met ${x} graden iets frisser`:`met ${x} graden duidelijk frisser`;
-      };
-      const todayText=`Vandaag ${clause(today)} en wordt het ${round(today.max)} graden.`;
-      const tomorrowText=(veryWet(today)&&veryWet(tomorrow))?'Morgen blijft het nat':
-        (wetScore(today)===wetScore(tomorrow)&&kind(today)===kind(tomorrow))?`Morgen ${clause(tomorrow)}`:
-        (wetScore(tomorrow)<wetScore(today))?`Morgen wordt het droger en ${clause(tomorrow)}`:
-        `Morgen ${clause(tomorrow)}`;
-      const p1=`${todayText} ${tomorrowText} en wordt het ${tempTomorrow()}.`;
-      // Perioden vormen op basis van samenhangende dagwaarden, niet losse trefwoorden.
-      // Dag 3-5: eerst aanhoudend nat benoemen, daarna het omslagmoment.
-      const mid=rows.slice(2,10),later=rows.slice(10,15);
-      const transitionIndex=rows.slice(2,10).findIndex((r,j)=>{
-        const i=j+2,prev=rows[i-1];
-        const drier=wetScore(r)<=1&&wetScore(prev)>=2;
-        const brightChange=brighter(r)&&(!brighter(prev)||(hasSun(r)&&hasSun(prev)&&r.sun>=prev.sun+2));
-        const persists=(i===9)||wetScore(rows[i+1])<=1;
-        return drier&&brightChange&&persists;
-      });
-      let p2='';
-      if(transitionIndex>=0){
-        const i=transitionIndex+2;
-        const prior=rows.slice(2,i);
-        if(prior.length&&prior.every(veryWet))p2=`Ook ${day(rows[2])} valt geregeld regen. `;
-        else if(prior.length&&prior.some(veryWet))p2=`${cap(day(rows[2]))} blijft het nog wisselvallig. `;
-        p2+=`Vanaf ${day(rows[i])} wordt het droger en krijgt de zon meer ruimte.`;
-        const following=rows[i+1];
-        if(i<=8&&following&&wetScore(following)<=1&&brighter(following))p2+=` Ook ${day(following)} zijn er zonnige perioden.`;
-      }else if(mid.filter(veryWet).length>=2){
-        p2=`Ook ${day(mid[0])} en de dagen daarna valt geregeld regen.`;
-      }else if(mid.filter(r=>wetScore(r)<=1&&brighter(r)).length>=2){
-        p2=`Vanaf ${day(mid[0])} zijn er vaker droge perioden met zon.`;
-      }else if(mid.some(veryWet)){
-        p2=`${cap(day(mid.find(veryWet)))} valt geregeld regen; op de andere dagen zijn er ook droge perioden.`;
-      }else{
-        p2=`Vanaf ${day(mid[0])} zijn er geregeld droge perioden${mid.some(brighter)?' met af en toe zon':''}.`;
-      }
-      const firstAvg=rows.slice(0,10).reduce((n,r)=>n+r.max,0)/10;
-      const laterAvg=later.reduce((n,r)=>n+r.max,0)/5;
-      const tempDiff=laterAvg-firstAvg;
-      const wetLater=later.filter(veryWet).length;
-      const showerLater=later.filter(r=>wetScore(r)===1).length;
-      const sunLater=later.filter(brighter).length;
-      const weatherLater=wetLater>=3?'In dag 11–15 blijft het wisselvallig met regelmatig regen.':
-        showerLater+wetLater>=3?'In dag 11–15 wisselen droge perioden en enkele buien elkaar af.':
-        sunLater>=3?'In dag 11–15 zijn er geregeld droge perioden met zon.':'In dag 11–15 zijn er overwegend droge perioden.';
-      const range=tempRange(later);
-      const tempLater=tempDiff<=-3?`Het wordt minder zacht, met maxima van ${range}.`:
-        tempDiff>=3?`Het wordt zachter, met maxima van ${range}.`:`De maxima liggen dan rond ${range}.`;
-      let p3=`${weatherLater} ${tempLater}`;
-      const lows=rows.slice(2).filter(r=>Number.isFinite(r.min));
-      const min=lows.length?Math.min(...lows.map(r=>r.min)):null;
-      if(min!==null&&min<=0)p3+=' In de koudste nachten kan het plaatselijk rond het vriespunt komen.';
-      else if(min!==null&&min<=2)p3+=` In de koudste nachten daalt de temperatuur tot ongeveer ${round(min)} ${round(min)===1?'graad':'graden'}.`;
-      // Onderste samenvatting voegt iets toe en herhaalt niet de volledige hoofdtekst.
-      const summary=el.querySelector('.rico5DaySummary');
-      if(summary){
-        const sunniest=rows.reduce((best,r)=>hasSun(r)&&(!best||r.sun>best.sun)?r:best,null);
-        const wettest=rows.reduce((best,r)=>hasRain(r)&&(!best||r.rain>best.rain)?r:best,null);
-        let note='';
-        if(sunniest&&sunniest.sun>=5)note=`De meeste zon wordt ${day(sunniest)} verwacht (${round(sunniest.sun)} uur).`;
-        else if(wettest&&wettest.rain>=8)note=`Vooral ${day(wettest)} kan veel regen vallen.`;
-        else note='De verwachting voor dag 11–15 is extra onzeker.';
-        summary.textContent=note;
-      }
-      for(const node of el.querySelectorAll('div,p,small,span')){
-        if(node.children.length===0&&/Regionale dagmodelmix|Dag- en uurwaarden blijven gescheiden/i.test(node.textContent||'')){
-          const scan=el.dataset.scanSavedAt;
-          let stamp='';if(scan){const d=new Date(Number(scan));if(!isNaN(d))stamp=new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}).format(d);}
-          if(!stamp){const m=(node.textContent||'').match(/scan\s+([^·]+)/i);if(m)stamp=m[1].trim();}
-          node.textContent=`Laatste update: ${stamp||'actuele modelscan'} · Kaart © OpenStreetMap-bijdragers`;
-        }
-      }
-      const texts=[p1,p2,p3];
-      if(texts.some(x=>/undefined|NaN|null|  |\.\./.test(x)))throw Error('Tekstcontrole: ongeldige waarde');
-      // Verifieer de periodeclaims tegen de dagwaarden voordat er gepubliceerd wordt.
-      if(transitionIndex>=0){const i=transitionIndex+2;if(wetScore(rows[i])>1||!brighter(rows[i]))throw Error('Tekstcontrole: onjuiste omslag');}
-      if(mid.filter(veryWet).length>=2&&transitionIndex<0&&!p2.includes('regen'))throw Error('Tekstcontrole: natte periode ontbreekt');
-      const wordCount=texts.join(' ').trim().split(/\s+/).length;
-      if(wordCount<35||wordCount>145)throw Error('Tekstcontrole: lengte '+wordCount);
-      const box=document.createElement('section');box.id='ricoExportRandstadNarrative';box.setAttribute('aria-label','Automatisch weerbericht Randstad');
-      box.style.cssText='box-sizing:border-box;margin:9px 8px 12px;padding:14px 15px;background:#e6f2fa;border:1px solid #bfdbe9;border-radius:12px;color:#17445f;font:15px/1.52 Arial,sans-serif;overflow-wrap:break-word;';
-      const heading=document.createElement('div');heading.textContent='Weerbericht Randstad';heading.style.cssText='font-size:19px;line-height:1.25;font-weight:800;margin-bottom:9px;color:#07527a';box.appendChild(heading);
-      for(const str of texts){const p=document.createElement('p');p.textContent=str;p.style.cssText='margin:0 0 9px';box.appendChild(p);}
-      box.lastElementChild.style.marginBottom='0';
-      const firstRow=el.querySelector('.rico5DayRow');firstRow.parentNode.insertBefore(box,firstRow);
-      return {text:texts.join(' '),words:wordCount,firstType:today.type,firstCategory:kind(today)};
-    }""")
-                # EC46: verse GitHub-browser heeft meestal geen localStorage-cache.
-                # Gebruik de bestaande Ricoweer-functie; die hergebruikt cache indien aanwezig.
-                ec46 = await widget_page.evaluate(r"""async () => {
-                  const result={weeks:[],error:null};
-                  try {
-                    let pack=null;
-                    try {pack=JSON.parse(localStorage.getItem('rw_ec46_6week_v1026')||'null')}catch(e){}
-                    const valid=p=>p?.data?.weekly?.time?.length && Number.isFinite(Number(p.savedAt)) &&
-                      Date.now()-Number(p.savedAt)<36*3600000 && Number(p.savedAt)<=Date.now()+60000;
-                    if(!valid(pack)) {
-                      if(typeof lr6Fetch!=='function')throw Error('EC46-ophaalfunctie ontbreekt');
-                      pack=await lr6Fetch(false);
-                    }
-                    if(!pack?.data?.weekly?.time?.length)throw Error('Geen EC46-weekgegevens');
-                    // Neem exact de EC46-maximaspreiding uit de bestaande app over.
-                    // De app combineert KNMI TX-klimaat 1996-2025 met EC46-afwijking,
-                    // of gebruikt dagelijkse EC46-maxima als terugval.
-                    if(typeof lr6BuildWeeks!=='function' || typeof lr6DisplayWeeks!=='function')
-                      throw Error('EC46-spreidingsfunctie ontbreekt in bronpagina');
-                    let climate=[];
-                    if(typeof loadClimateDaily==='function') {
-                      try { climate=await loadClimateDaily(false) || []; } catch(e) {
-                        result.climateError=String(e?.message||e);
-                      }
-                    }
-                    const all=lr6BuildWeeks(pack.data,climate);
-                    const lastDaily=document.querySelector('#ricoWidgetFacts .rico5DayRow:last-of-type')?.dataset.date ||
-                      [...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')].at(-1)?.dataset.date;
-                    const future=lr6DisplayWeeks(all).filter(x=>!x.partial && (!lastDaily || x.start>lastDaily));
-                    const wetValue=x=>{
-                      const i=x.i,raw=pack.data.weekly?.precipitation_anomaly_gt0?.[i];
-                      if(raw===null||raw===undefined||raw==='')return null;
-                      const v=Number(raw);return Number.isFinite(v)?(v<=1?v*100:v):null;
-                    };
-                    result.weeks=future.slice(0,6).map(x=>({
-                      start:x.start,end:x.end,
-                      anomaly:Number.isFinite(x.tA)?x.tA:null,
-                      txMin:Number.isFinite(x.txMin)?x.txMin:null,
-                      txMax:Number.isFinite(x.txMax)?x.txMax:null,
-                      wet:wetValue(x)
-                    }));
-                    if(!result.weeks.length)result.error='Geen bruikbare EC46-weken na dag 15';
-                  }catch(e){result.error=String(e?.message||e)}
-                  return result;
-                }""")
-                print('EC46 diagnose:',json.dumps(ec46,ensure_ascii=False),flush=True)
-                ec46_display = await forecast.evaluate(r"""(el,pack) => {
-                  const box=document.createElement('section');box.id='ricoExportEC46';
-                  box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:12px 15px;background:#f3f7ff;border:1px solid #c9d8ec;border-radius:12px;color:#17445f;font:14px/1.5 Arial,sans-serif';
-                  const h=document.createElement('div');h.textContent='EC46 · weken na dag 15';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
-                  const lines=[];
-                  if(pack.weeks?.length){
-                    for(const w of pack.weeks){
-                      const temp=w.anomaly>=.4?'warmer':w.anomaly<=-.4?'kouder':'rond normaal';
-                      const delta=(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C';
-                      const hasMax=Number.isFinite(w.txMin)&&Number.isFinite(w.txMax);
-                      const actual=hasMax
-                        ?`maxima ${Math.floor(Math.min(w.txMin,w.txMax))} tot ${Math.ceil(Math.max(w.txMin,w.txMax))} °C`
-                        :`${temp} (${delta} t.o.v. normaal; maxima niet beschikbaar)`;
-                      const rain=w.wet===null?'':w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
-                      const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
-                      lines.push(`${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain}`);
-                    }
-                  }else lines.push('EC46-vooruitblik tijdelijk niet beschikbaar.');
-                  for(const line of lines){const d=document.createElement('div');d.textContent=line;d.style.cssText='padding:5px 0;border-bottom:1px solid #dbe5f0';box.appendChild(d)}
-                  const note=document.createElement('div');note.textContent='Indicatieve weektrend, geen dagverwachting.';note.style.cssText='font-size:11px;opacity:.8;margin-top:7px';box.appendChild(note);
-                  el.appendChild(box);return {lines,note:note.textContent};
-                }""",ec46)
-                print('Randstad-weerbericht:',json.dumps(narrative,ensure_ascii=False),flush=True)
-                if narrative['words'] < 25 or narrative['words'] > 145:
-                    raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
-                compact_file=OUT/'randstad-5dagen.png'
-                await forecast.screenshot(path=str(compact_file),type='png',animations='disabled',timeout=50000)
-                if compact_file.stat().st_size<12000:
-                    raise RuntimeError('Randstad 15-daagse PNG lijkt leeg; publicatie gestopt.')
-                # Ook een logisch benoemde URL; de bestaande WordPress-afbeelding blijft werken.
-                (OUT/'randstad-10dagen-compact.png').write_bytes(compact_file.read_bytes())
-                (OUT/'randstad-15dagen-compact.png').write_bytes(compact_file.read_bytes())
-                print(f'Compacte Randstad-15-daagse gemaakt: {compact_file.name} ({compact_file.stat().st_size} bytes)',flush=True)
-                # V101.0: publiceer ook de volledige Randstad 10-daagse uit DEZELFDE
-                # landelijke scan als de widget. Geen tweede ophaalronde, geen andere
-                # modelrun en geen terugval op niet-regionale Houten-daggegevens.
-                regional = await widget_page.evaluate("""async () => {
-                  if(typeof drawRandstadCardsPng!=='function')
-                    throw new Error('De Randstad-PNG-functie ontbreekt');
-                  const picture=await drawRandstadCardsPng({strict:true,returnDataUrl:true});
-                  const safeNumber=v=>v==null||v===''||v==='null'||v==='undefined'?null:Number(v);
-                  const compact=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')].map(el=>({
-                    date:el.dataset.date,max:safeNumber(el.dataset.max),min:safeNumber(el.dataset.min),
-                    rain:safeNumber(el.dataset.rain),sun:safeNumber(el.dataset.sun),
-                    wind:safeNumber(el.dataset.wind),type:el.dataset.type
-                  }));
-                  const scanAt=document.getElementById('ricoWidgetFacts')?.dataset.scanSavedAt;
-                  const latest=JSON.parse(localStorage.getItem('rico-national-scan-v75-35punten')||'null')?.savedAt;
-                  if(String(latest)!==String(scanAt))throw new Error('De modelscan veranderde tijdens de PNG-export.');
-                  return {picture,compact,scanAt};
-                }""")
-                big = regional['picture']
-                compact = regional['compact']
-                if len(big['rows']) != 15 or len(compact) != 15:
-                    raise RuntimeError('Randstadkaart en widget hebben niet het juiste aantal dagen.')
-                def near(a,b):
-                    if a is None or b is None: return a is b
-                    return abs(float(a)-float(b)) < 0.000001
-                for a,b in zip(big['rows'],compact):
-                    for field in ('date','max','min','rain','sun','wind','type'):
-                        if not (near(a.get(field),b.get(field)) if field not in ('date','type') else a.get(field)==b.get(field)):
-                            raise RuntimeError(f'Randstadkaart en widget verschillen op {a.get("date")} veld {field}: {a.get(field)} vs {b.get(field)}.')
-                if not str(big['dataUrl']).startswith('data:image/png;base64,'):
-                    raise RuntimeError('De Randstad 15-daagse leverde geen geldige PNG.')
-                # Plaats hetzelfde weerbericht ook BOVEN de volledige Randstad-PNG.
-                # Zo toont de bestaande WordPress-URL randstad-10dagen.png de tekst.
-                # Compositie gebeurt lokaal in de browser; geen extra weer-API-calls.
-                combined_url = await widget_page.evaluate(r"""async ({imageUrl, text}) => {
-                  const image = new Image();
-                  image.src = imageUrl;
-                  await image.decode();
-                  const width = image.naturalWidth;
-                  const scale = width / 1000;
-                  const canvas = document.createElement('canvas');
-                  const ctx = canvas.getContext('2d');
-                  const pad = Math.round(32*scale);
-                  const inner = width-2*pad;
-                  const lineHeight = Math.round(30*scale);
-                  const paragraphs = text.split(/(?<=\.)\s+(?=[A-Z])/); // unused: preserve original text
-                  const original = document.getElementById('ricoExportRandstadNarrative');
-                  const ptexts = [...(original?.querySelectorAll('p')||[])].map(p=>p.textContent);
-                  const ec46=document.getElementById('ricoExportEC46');
-                  const ec46Lines=ec46?[...ec46.querySelectorAll('div')].map(x=>x.textContent):[];
-                  if(ptexts.length!==3)throw new Error('Weerbericht ontbreekt bij PNG-compositie');
-                  ctx.font=`${Math.round(23*scale)}px Arial`;
-                  function wrap(str){
-                    const result=[];let line='';
-                    for(const word of str.split(/\s+/)){
-                      const candidate=line?line+' '+word:word;
-                      if(ctx.measureText(candidate).width>inner && line){result.push(line);line=word;}
-                      else line=candidate;
-                    }
-                    if(line)result.push(line);
-                    return result;
+            # Extra WordPress-zijbalkkaart met vijfdaagse Randstadverwachting. Daggegevens komen uit exact dezelfde
+            # landelijke modelmix; geen dagmaxima uit uurverwachtingen afleiden.
+            # Ook dit bestand pas publiceerbaar maken na inhoudelijke/visuele controle.
+            from urllib.parse import urlparse, urlunparse
+            source_parts=urlparse(SOURCE)
+            if not source_parts.path.endswith('/weerkaart.html'):
+                raise RuntimeError('SOURCE_MAP_URL moet eindigen op /weerkaart.html')
+            widget_source=urlunparse(source_parts._replace(
+                path=source_parts.path[:-len('weerkaart.html')]+'widgetkaart.html',
+                query=f'publicatie={int(datetime.now().timestamp()*1000)}'))
+            widget_page=await context.new_page()
+            widget_response=await widget_page.goto(widget_source, wait_until='domcontentloaded',timeout=55000)
+            if not widget_response or not widget_response.ok:
+                raise RuntimeError(f'Compacte bronpagina widgetkaart.html niet bereikbaar ({widget_response.status if widget_response else "geen reactie"}).')
+            for attempt in range(2):
+                try:
+                    await widget_page.wait_for_function(WIDGET_VALIDATED_JS,
+                        arg={'cacheKey':SCAN_KEY,'date':expected[0],'maxAge':MAX_AGE_MS,'minPts':MIN_POINTS},
+                        timeout=MAX_WAIT_MS if attempt == 0 else RETRY_WAIT_MS,polling=1300)
+                    print(f"Randstad-widget compleet (poging {attempt + 1}).", flush=True)
+                    break
+                except PlaywrightTimeoutError as exc:
+                    debug=await widget_page.evaluate(DEBUG_JS,SCAN_KEY)
+                    print(f'Widgetdiagnose poging {attempt + 1}:',json.dumps(debug,ensure_ascii=False),flush=True)
+                    if attempt == 1:
+                        raise RuntimeError('Widgetpagina heeft na twee pogingen onvoldoende actuele dagmodelmix of kaartpunten.') from exc
+                    print('Herstart widgetpagina voor nieuwe modelscan...',flush=True)
+                    await widget_page.reload(wait_until='domcontentloaded',timeout=55000)
+            widget=widget_page.locator('#ricoLiveShell')
+            await widget.scroll_into_view_if_needed()
+            await widget_page.wait_for_timeout(1600)
+            quality=await widget.locator('.ricoWeatherCard:first-child').evaluate(QUALITY_JS)
+            facts=await widget_page.locator('#ricoWidgetFacts .rico5DayRow').count()
+            size=await widget.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
+            print('WordPress-zijbalkkaart:',quality,'facts:',facts,'grootte:',size,flush=True)
+            if quality['tiles']<7 or quality['pins']<7 or quality['width']<430 or quality['height']<560 or facts!=10 or size['w']<450:
+                raise RuntimeError('De widget is onvolledig; huidige gepubliceerde afbeeldingen blijven behouden.')
+            widget_destination=OUT/'widget.png'
+            await widget.screenshot(path=str(widget_destination),type='png',animations='disabled',timeout=50000)
+            if widget_destination.stat().st_size<45000:
+                raise RuntimeError('Vijfdaagse Randstad-widget PNG lijkt leeg; publicatie gestopt.')
+            print(f'Widget gemaakt: {widget_destination.name} ({widget_destination.stat().st_size} bytes)',flush=True)
+            # Extra compacte tiendaagse zonder de grote landkaart. Deze versie past
+            # in de smalle WordPress-widgetbalk. Exact dezelfde regionale dagmix.
+            forecast=widget_page.locator('#ricoWidgetFacts')
+            if await forecast.locator('.rico5DayRow').count()!=10:
+                raise RuntimeError('Randstad 10-daagse onvolledig: publicatie gestopt.')
+            forecast_size=await forecast.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
+            if forecast_size['w']<400 or forecast_size['h']<250:
+                raise RuntimeError('Randstad overzicht te klein; publicatie gestopt: '+str(forecast_size))
+            # WordPress: zelfstandig Randstad-weerbericht BOVEN de tien dagregels.
+            # De tekst wordt uitsluitend uit de reeds gecontroleerde regionale
+            # dagrijen samengesteld: geen nieuwe API-calls of uurlijkse maxima.
+            # V10.4: periodeanalyse met gevalideerde omslagmomenten en natuurlijkere tekst.
+            narrative = await forecast.evaluate(r"""el => {
+  const rows=[...el.querySelectorAll('.rico5DayRow')].map(node=>{
+    const v=k=>node.dataset[k];
+    const num=k=>v(k)==null||v(k)===''?null:Number(v(k));
+    const description=(node.innerText||'').split('\n').map(x=>x.trim()).find(x=>/onweer|sneeuw|regenachtig|regen|buien|bui|zon|bewolk|grijs|mist|droog/i.test(x))||'';
+    return {date:v('date'),type:(v('type')||description).toLowerCase(),max:num('max'),min:num('min'),rain:num('rain'),sun:num('sun')};
+  });
+  if(rows.length!==10||rows.some(r=>!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(r.date)||!Number.isFinite(r.max)))throw Error('Onvolledige dagwaarden voor weerbericht');
+  const day=r=>new Intl.DateTimeFormat('nl-NL',{weekday:'long',timeZone:'UTC'}).format(new Date(r.date+'T12:00:00Z'));
+  const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
+  const round=n=>Math.round(n);
+  const hasRain=r=>Number.isFinite(r.rain);
+  const hasSun=r=>Number.isFinite(r.sun);
+  const kind=r=>{
+    const s=r.type;
+    if(/onweer/.test(s))return 'onweer';
+    if(/sneeuw/.test(s))return 'sneeuw';
+    if(/regenachtig|regen/.test(s))return 'regen';
+    if(/bui/.test(s))return 'buien';
+    if(/zonnig|veel zon/.test(s))return 'zon';
+    if(/zon/.test(s))return 'zonwolken';
+    if(/bewolk|grijs/.test(s))return 'bewolkt';
+    return 'onbekend';
+  };
+  // Neerslaghoeveelheid en dagsymbool samen beoordelen. Een bui-icoon met
+  // 0,6 mm is geen langdurig natte dag; 9 mm regen evenmin een droge dag.
+  const wetScore=r=>{
+    if(hasRain(r)){
+      if(r.rain>=8)return 3;
+      if(r.rain>=3)return 2;
+      if(r.rain>=1)return 1;
+      return 0;
+    }
+    return kind(r)==='regen'?2:['buien','onweer','sneeuw'].includes(kind(r))?1:0;
+  };
+  const dry=r=>wetScore(r)===0;
+  const veryWet=r=>wetScore(r)>=2;
+  const brighter=r=>hasSun(r)?r.sun>=3:['zon','zonwolken'].includes(kind(r));
+  const sunny=r=>hasSun(r)?r.sun>=5:kind(r)==='zon';
+  const tempRange=arr=>{const v=arr.map(r=>round(r.max));const lo=Math.min(...v),hi=Math.max(...v);return lo===hi?`${lo} graden`:hi-lo===1?`${lo} of ${hi} graden`:`${lo} tot ${hi} graden`;};
+  const today=rows[0],tomorrow=rows[1];
+  const clause=r=>{
+    if(veryWet(r))return 'valt geregeld regen';
+    if(kind(r)==='onweer')return 'komen buien voor, mogelijk met onweer';
+    if(kind(r)==='sneeuw')return 'kan sneeuw vallen';
+    if(wetScore(r)===1)return sunny(r)?'zijn er zonnige perioden en enkele buien':'komen enkele buien voor';
+    if(sunny(r))return 'schijnt de zon flink';
+    if(brighter(r))return 'zijn er perioden met zon';
+    if(kind(r)==='bewolkt')return 'overheerst de bewolking';
+    return 'is het overwegend droog';
+  };
+  const delta=round(tomorrow.max)-round(today.max);
+  const tempTomorrow=()=>{
+    const x=round(tomorrow.max);
+    if(delta===0)return `opnieuw ${x} graden`;
+    if(delta>0)return delta<=2?`met ${x} graden iets zachter`:`met ${x} graden duidelijk zachter`;
+    if(today.max>=10&&tomorrow.max>=10)return delta>=-2?`met ${x} graden iets minder zacht`:`met ${x} graden minder zacht`;
+    if(today.max>=9&&tomorrow.max>=7)return `met ${x} graden minder zacht`;
+    return delta>=-2?`met ${x} graden iets frisser`:`met ${x} graden duidelijk frisser`;
+  };
+  const todayText=`Vandaag ${clause(today)} en wordt het ${round(today.max)} graden.`;
+  const tomorrowText=(veryWet(today)&&veryWet(tomorrow))?'Morgen blijft het nat':
+    (wetScore(today)===wetScore(tomorrow)&&kind(today)===kind(tomorrow))?`Morgen ${clause(tomorrow)}`:
+    (wetScore(tomorrow)<wetScore(today))?`Morgen wordt het droger en ${clause(tomorrow)}`:
+    `Morgen ${clause(tomorrow)}`;
+  const p1=`${todayText} ${tomorrowText} en wordt het ${tempTomorrow()}.`;
+  // Perioden vormen op basis van samenhangende dagwaarden, niet losse trefwoorden.
+  // Dag 3-5: eerst aanhoudend nat benoemen, daarna het omslagmoment.
+  const mid=rows.slice(2,5),later=rows.slice(5);
+  const transitionIndex=rows.slice(2,5).findIndex((r,j)=>{
+    const i=j+2,prev=rows[i-1];
+    const drier=wetScore(r)<=1&&wetScore(prev)>=2;
+    const brightChange=brighter(r)&&(!brighter(prev)||(hasSun(r)&&hasSun(prev)&&r.sun>=prev.sun+2));
+    const persists=(i===4)||wetScore(rows[i+1])<=1;
+    return drier&&brightChange&&persists;
+  });
+  let p2='';
+  if(transitionIndex>=0){
+    const i=transitionIndex+2;
+    const prior=rows.slice(2,i);
+    if(prior.length&&prior.every(veryWet))p2=`Ook ${day(rows[2])} valt geregeld regen. `;
+    else if(prior.length&&prior.some(veryWet))p2=`${cap(day(rows[2]))} blijft het nog wisselvallig. `;
+    p2+=`Vanaf ${day(rows[i])} wordt het droger en krijgt de zon meer ruimte.`;
+    const following=rows[i+1];
+    if(i<=3&&following&&wetScore(following)<=1&&brighter(following))p2+=` Ook ${day(following)} zijn er zonnige perioden.`;
+  }else if(mid.filter(veryWet).length>=2){
+    p2=`Ook ${day(mid[0])} en de dagen daarna valt geregeld regen.`;
+  }else if(mid.filter(r=>wetScore(r)<=1&&brighter(r)).length>=2){
+    p2=`Vanaf ${day(mid[0])} zijn er vaker droge perioden met zon.`;
+  }else if(mid.some(veryWet)){
+    p2=`${cap(day(mid.find(veryWet)))} valt geregeld regen; op de andere dagen zijn er ook droge perioden.`;
+  }else{
+    p2=`Vanaf ${day(mid[0])} zijn er geregeld droge perioden${mid.some(brighter)?' met af en toe zon':''}.`;
+  }
+  const firstAvg=rows.slice(0,5).reduce((n,r)=>n+r.max,0)/5;
+  const laterAvg=later.reduce((n,r)=>n+r.max,0)/5;
+  const tempDiff=laterAvg-firstAvg;
+  const wetLater=later.filter(veryWet).length;
+  const showerLater=later.filter(r=>wetScore(r)===1).length;
+  const sunLater=later.filter(brighter).length;
+  const weatherLater=wetLater>=3?'Verder vooruit blijft het wisselvallig met regelmatig regen.':
+    showerLater+wetLater>=3?'Verder vooruit wisselen droge perioden en enkele buien elkaar af.':
+    sunLater>=3?'Verder vooruit zijn er geregeld droge perioden met zon.':'Verder vooruit zijn er overwegend droge perioden.';
+  const range=tempRange(later);
+  const tempLater=tempDiff<=-3?`Het wordt minder zacht, met maxima van ${range}.`:
+    tempDiff>=3?`Het wordt zachter, met maxima van ${range}.`:`De maxima liggen dan rond ${range}.`;
+  let p3=`${weatherLater} ${tempLater}`;
+  const lows=rows.slice(2).filter(r=>Number.isFinite(r.min));
+  const min=lows.length?Math.min(...lows.map(r=>r.min)):null;
+  if(min!==null&&min<=0)p3+=' In de koudste nachten kan het plaatselijk rond het vriespunt komen.';
+  else if(min!==null&&min<=2)p3+=` In de koudste nachten daalt de temperatuur tot ongeveer ${round(min)} ${round(min)===1?'graad':'graden'}.`;
+  // Onderste samenvatting voegt iets toe en herhaalt niet de volledige hoofdtekst.
+  const summary=el.querySelector('.rico5DaySummary');
+  if(summary){
+    const sunniest=rows.reduce((best,r)=>hasSun(r)&&(!best||r.sun>best.sun)?r:best,null);
+    const wettest=rows.reduce((best,r)=>hasRain(r)&&(!best||r.rain>best.rain)?r:best,null);
+    let note='';
+    if(sunniest&&sunniest.sun>=5)note=`De meeste zon wordt ${day(sunniest)} verwacht (${round(sunniest.sun)} uur).`;
+    else if(wettest&&wettest.rain>=8)note=`Vooral ${day(wettest)} kan veel regen vallen.`;
+    else note='De verwachting voor dag 6–10 is nog onzeker.';
+    summary.textContent=note;
+  }
+  for(const node of el.querySelectorAll('div,p,small,span')){
+    if(node.children.length===0&&/Regionale dagmodelmix|Dag- en uurwaarden blijven gescheiden/i.test(node.textContent||'')){
+      const scan=el.dataset.scanSavedAt;
+      let stamp='';if(scan){const d=new Date(Number(scan));if(!isNaN(d))stamp=new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}).format(d);}
+      if(!stamp){const m=(node.textContent||'').match(/scan\s+([^·]+)/i);if(m)stamp=m[1].trim();}
+      node.textContent=`Laatste update: ${stamp||'actuele modelscan'} · Kaart © OpenStreetMap-bijdragers`;
+    }
+  }
+  const texts=[p1,p2,p3];
+  if(texts.some(x=>/undefined|NaN|null|  |\.\./.test(x)))throw Error('Tekstcontrole: ongeldige waarde');
+  // Verifieer de periodeclaims tegen de dagwaarden voordat er gepubliceerd wordt.
+  if(transitionIndex>=0){const i=transitionIndex+2;if(wetScore(rows[i])>1||!brighter(rows[i]))throw Error('Tekstcontrole: onjuiste omslag');}
+  if(mid.filter(veryWet).length>=2&&transitionIndex<0&&!p2.includes('regen'))throw Error('Tekstcontrole: natte periode ontbreekt');
+  const wordCount=texts.join(' ').trim().split(/\s+/).length;
+  if(wordCount<35||wordCount>145)throw Error('Tekstcontrole: lengte '+wordCount);
+  const box=document.createElement('section');box.id='ricoExportRandstadNarrative';box.setAttribute('aria-label','Automatisch weerbericht Randstad');
+  box.style.cssText='box-sizing:border-box;margin:9px 8px 12px;padding:14px 15px;background:#e6f2fa;border:1px solid #bfdbe9;border-radius:12px;color:#17445f;font:15px/1.52 Arial,sans-serif;overflow-wrap:break-word;';
+  const heading=document.createElement('div');heading.textContent='Weerbericht Randstad';heading.style.cssText='font-size:19px;line-height:1.25;font-weight:800;margin-bottom:9px;color:#07527a';box.appendChild(heading);
+  for(const str of texts){const p=document.createElement('p');p.textContent=str;p.style.cssText='margin:0 0 9px';box.appendChild(p);}
+  box.lastElementChild.style.marginBottom='0';
+  const firstRow=el.querySelector('.rico5DayRow');firstRow.parentNode.insertBefore(box,firstRow);
+  return {text:texts.join(' '),words:wordCount,firstType:today.type,firstCategory:kind(today)};
+}""")
+            # EC46: verse GitHub-browser heeft meestal geen localStorage-cache.
+            # Gebruik de bestaande Ricoweer-functie; die hergebruikt cache indien aanwezig.
+            ec46 = await widget_page.evaluate(r"""async () => {
+              const result={weeks:[],error:null};
+              try {
+                let pack=null;
+                try {pack=JSON.parse(localStorage.getItem('rw_ec46_6week_v1026')||'null')}catch(e){}
+                const valid=p=>p?.data?.weekly?.time?.length && Number.isFinite(Number(p.savedAt)) &&
+                  Date.now()-Number(p.savedAt)<36*3600000 && Number(p.savedAt)<=Date.now()+60000;
+                if(!valid(pack)) {
+                  if(typeof lr6Fetch!=='function')throw Error('EC46-ophaalfunctie ontbreekt');
+                  pack=await lr6Fetch(false);
+                }
+                if(!pack?.data?.weekly?.time?.length)throw Error('Geen EC46-weekgegevens');
+                // Neem exact de EC46-maximaspreiding uit de bestaande app over.
+                // De app combineert KNMI TX-klimaat 1996-2025 met EC46-afwijking,
+                // of gebruikt dagelijkse EC46-maxima als terugval.
+                if(typeof lr6BuildWeeks!=='function' || typeof lr6DisplayWeeks!=='function')
+                  throw Error('EC46-spreidingsfunctie ontbreekt in bronpagina');
+                let climate=[];
+                if(typeof loadClimateDaily==='function') {
+                  try { climate=await loadClimateDaily(false) || []; } catch(e) {
+                    result.climateError=String(e?.message||e);
                   }
-                  const lines=ptexts.map(wrap);
-                  if(ec46Lines.length){lines.push(wrap('EC46 · weken na dag 15'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
-                  const headingHeight=Math.round(58*scale);
-                  const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
-                  const topHeight=pad+headingHeight+textHeight+pad;
-                  canvas.width=width;canvas.height=topHeight+image.naturalHeight;
-                  ctx.fillStyle='#eaf4fa';ctx.fillRect(0,0,width,topHeight);
-                  ctx.fillStyle='#07527a';ctx.font=`bold ${Math.round(34*scale)}px Arial`;
-                  ctx.fillText('Weerbericht Randstad',pad,pad+Math.round(32*scale));
-                  ctx.fillStyle='#17445f';ctx.font=`${Math.round(23*scale)}px Arial`;
-                  let y=pad+headingHeight;
-                  for(const group of lines){
-                    for(const line of group){ctx.fillText(line,pad,y);y+=lineHeight;}
-                    y+=Math.round(19*scale);
-                  }
-                  ctx.drawImage(image,0,topHeight);
-                  return canvas.toDataURL('image/png');
-                }""", {'imageUrl':big['dataUrl'],'text':narrative['text']})
-                if not combined_url.startswith('data:image/png;base64,'):
-                    raise RuntimeError('Volledige Randstad-PNG met weerbericht is ongeldig.')
-                big_bytes = base64.b64decode(combined_url.split(',',1)[1], validate=True)
-                if len(big_bytes) < 50000:
-                    raise RuntimeError('De volledige Randstad-PNG lijkt leeg.')
-                (OUT/'randstad-10dagen.png').write_bytes(big_bytes)
-                (OUT/'randstad-15dagen.png').write_bytes(big_bytes)
-                print(f'Randstad 15-daagse uit dezelfde scan: {len(big_bytes)} bytes, scan {regional["scanAt"]}',flush=True)
-                regional_ok = True
-            except Exception as exc:
-                print(f'REGIONALE EXPORT MISLUKT: {exc}', flush=True)
-                print('De twee actuele landelijke kaarten zijn wel gecontroleerd en blijven publiceerbaar.', flush=True)
-                # Voorkom dat nieuw geschreven tussenbestanden van een mislukte
-                # Randstad-export met de oude bestanden worden gemengd.
-                for filename in REGIONAL_NAMES:
-                    (OUT / filename).unlink(missing_ok=True)
-                restored = fetch_previous_regionals(OUT)
-                if restored:
-                    print('Randstad: alleen eerder gepubliceerde PNGs behouden; GEEN nieuwe regionale update.', flush=True)
-                else:
-                    print('Randstad: vorige PNGs niet bereikbaar; alleen landelijke kaarten publiceren.', flush=True)
-            regionals = [name for name in REGIONAL_NAMES if (OUT / name).exists()]
-            write_landing(OUT, regionals, old=not regional_ok)
-            print('GEREED: landelijke kaarten actueel; Randstad '+
-                  ('actueel (15 dagen).' if regional_ok else 'niet vernieuwd (oude PNGs waar beschikbaar).'), flush=True)
+                }
+                const all=lr6BuildWeeks(pack.data,climate);
+                const future=lr6DisplayWeeks(all).filter(x=>!x.partial);
+                const wetValue=x=>{
+                  const i=x.i,raw=pack.data.weekly?.precipitation_anomaly_gt0?.[i];
+                  if(raw===null||raw===undefined||raw==='')return null;
+                  const v=Number(raw);return Number.isFinite(v)?(v<=1?v*100:v):null;
+                };
+                result.weeks=future.slice(2,6).map(x=>({
+                  start:x.start,end:x.end,
+                  anomaly:Number.isFinite(x.tA)?x.tA:null,
+                  txMin:Number.isFinite(x.txMin)?x.txMin:null,
+                  txMax:Number.isFinite(x.txMax)?x.txMax:null,
+                  wet:wetValue(x)
+                }));
+                if(!result.weeks.length)result.error='Geen bruikbare EC46-weken 3–6';
+              }catch(e){result.error=String(e?.message||e)}
+              return result;
+            }""")
+            print('EC46 diagnose:',json.dumps(ec46,ensure_ascii=False),flush=True)
+            ec46_display = await forecast.evaluate(r"""(el,pack) => {
+              const box=document.createElement('section');box.id='ricoExportEC46';
+              box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:12px 15px;background:#f3f7ff;border:1px solid #c9d8ec;border-radius:12px;color:#17445f;font:14px/1.5 Arial,sans-serif';
+              const h=document.createElement('div');h.textContent='EC46 · vooruitblik week 3–6';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
+              const lines=[];
+              if(pack.weeks?.length){
+                for(const w of pack.weeks){
+                  const temp=w.anomaly>=.4?'warmer':w.anomaly<=-.4?'kouder':'rond normaal';
+                  const delta=(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C';
+                  const hasMax=Number.isFinite(w.txMin)&&Number.isFinite(w.txMax);
+                  const actual=hasMax
+                    ?`maxima ${Math.floor(Math.min(w.txMin,w.txMax))} tot ${Math.ceil(Math.max(w.txMin,w.txMax))} °C`
+                    :`${temp} (${delta} t.o.v. normaal; maxima niet beschikbaar)`;
+                  const rain=w.wet===null?'':w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
+                  const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
+                  lines.push(`${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain}`);
+                }
+              }else lines.push('EC46-vooruitblik tijdelijk niet beschikbaar.');
+              for(const line of lines){const d=document.createElement('div');d.textContent=line;d.style.cssText='padding:5px 0;border-bottom:1px solid #dbe5f0';box.appendChild(d)}
+              const note=document.createElement('div');note.textContent='Indicatieve weektrend, geen dagverwachting.';note.style.cssText='font-size:11px;opacity:.8;margin-top:7px';box.appendChild(note);
+              el.appendChild(box);return {lines,note:note.textContent};
+            }""",ec46)
+            print('Randstad-weerbericht:',json.dumps(narrative,ensure_ascii=False),flush=True)
+            if narrative['words'] < 25 or narrative['words'] > 145:
+                raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
+            compact_file=OUT/'randstad-5dagen.png'
+            await forecast.screenshot(path=str(compact_file),type='png',animations='disabled',timeout=50000)
+            if compact_file.stat().st_size<12000:
+                raise RuntimeError('Randstad 10-daagse PNG lijkt leeg; publicatie gestopt.')
+            # Ook een logisch benoemde URL; de bestaande WordPress-afbeelding blijft werken.
+            (OUT/'randstad-10dagen-compact.png').write_bytes(compact_file.read_bytes())
+            print(f'Compacte Randstad-10-daagse gemaakt: {compact_file.name} ({compact_file.stat().st_size} bytes)',flush=True)
+            # V101.0: publiceer ook de volledige Randstad 10-daagse uit DEZELFDE
+            # landelijke scan als de widget. Geen tweede ophaalronde, geen andere
+            # modelrun en geen terugval op niet-regionale Houten-daggegevens.
+            regional = await widget_page.evaluate("""async () => {
+              if(typeof drawRandstadCardsPng!=='function')
+                throw new Error('De Randstad-PNG-functie ontbreekt');
+              const picture=await drawRandstadCardsPng({strict:true,returnDataUrl:true});
+              const safeNumber=v=>v==null||v===''||v==='null'||v==='undefined'?null:Number(v);
+              const compact=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')].map(el=>({
+                date:el.dataset.date,max:safeNumber(el.dataset.max),min:safeNumber(el.dataset.min),
+                rain:safeNumber(el.dataset.rain),sun:safeNumber(el.dataset.sun),
+                wind:safeNumber(el.dataset.wind),type:el.dataset.type
+              }));
+              const scanAt=document.getElementById('ricoWidgetFacts')?.dataset.scanSavedAt;
+              const latest=JSON.parse(localStorage.getItem('rico-national-scan-v75-35punten')||'null')?.savedAt;
+              if(String(latest)!==String(scanAt))throw new Error('De modelscan veranderde tijdens de PNG-export.');
+              return {picture,compact,scanAt};
+            }""")
+            big = regional['picture']
+            compact = regional['compact']
+            if len(big['rows']) != 10 or len(compact) != 10:
+                raise RuntimeError('Randstadkaart en widget hebben niet het juiste aantal dagen.')
+            def near(a,b):
+                if a is None or b is None: return a is b
+                return abs(float(a)-float(b)) < 0.000001
+            for a,b in zip(big['rows'],compact):
+                for field in ('date','max','min','rain','sun','wind','type'):
+                    if not (near(a.get(field),b.get(field)) if field not in ('date','type') else a.get(field)==b.get(field)):
+                        raise RuntimeError(f'Randstadkaart en widget verschillen op {a.get("date")} veld {field}: {a.get(field)} vs {b.get(field)}.')
+            if not str(big['dataUrl']).startswith('data:image/png;base64,'):
+                raise RuntimeError('De Randstad 10-daagse leverde geen geldige PNG.')
+            # Plaats hetzelfde weerbericht ook BOVEN de volledige Randstad-PNG.
+            # Zo toont de bestaande WordPress-URL randstad-10dagen.png de tekst.
+            # Compositie gebeurt lokaal in de browser; geen extra weer-API-calls.
+            combined_url = await widget_page.evaluate(r"""async ({imageUrl, text}) => {
+              const image = new Image();
+              image.src = imageUrl;
+              await image.decode();
+              const width = image.naturalWidth;
+              const scale = width / 1000;
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+              const pad = Math.round(32*scale);
+              const inner = width-2*pad;
+              const lineHeight = Math.round(30*scale);
+              const paragraphs = text.split(/(?<=\.)\s+(?=[A-Z])/); // unused: preserve original text
+              const original = document.getElementById('ricoExportRandstadNarrative');
+              const ptexts = [...(original?.querySelectorAll('p')||[])].map(p=>p.textContent);
+              const ec46=document.getElementById('ricoExportEC46');
+              const ec46Lines=ec46?[...ec46.querySelectorAll('div')].map(x=>x.textContent):[];
+              if(ptexts.length!==3)throw new Error('Weerbericht ontbreekt bij PNG-compositie');
+              ctx.font=`${Math.round(23*scale)}px Arial`;
+              function wrap(str){
+                const result=[];let line='';
+                for(const word of str.split(/\s+/)){
+                  const candidate=line?line+' '+word:word;
+                  if(ctx.measureText(candidate).width>inner && line){result.push(line);line=word;}
+                  else line=candidate;
+                }
+                if(line)result.push(line);
+                return result;
+              }
+              const lines=ptexts.map(wrap);
+              if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 3–6'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
+              const headingHeight=Math.round(58*scale);
+              const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
+              const topHeight=pad+headingHeight+textHeight+pad;
+              canvas.width=width;canvas.height=topHeight+image.naturalHeight;
+              ctx.fillStyle='#eaf4fa';ctx.fillRect(0,0,width,topHeight);
+              ctx.fillStyle='#07527a';ctx.font=`bold ${Math.round(34*scale)}px Arial`;
+              ctx.fillText('Weerbericht Randstad',pad,pad+Math.round(32*scale));
+              ctx.fillStyle='#17445f';ctx.font=`${Math.round(23*scale)}px Arial`;
+              let y=pad+headingHeight;
+              for(const group of lines){
+                for(const line of group){ctx.fillText(line,pad,y);y+=lineHeight;}
+                y+=Math.round(19*scale);
+              }
+              ctx.drawImage(image,0,topHeight);
+              return canvas.toDataURL('image/png');
+            }""", {'imageUrl':big['dataUrl'],'text':narrative['text']})
+            if not combined_url.startswith('data:image/png;base64,'):
+                raise RuntimeError('Volledige Randstad-PNG met weerbericht is ongeldig.')
+            big_bytes = base64.b64decode(combined_url.split(',',1)[1], validate=True)
+            if len(big_bytes) < 50000:
+                raise RuntimeError('De volledige Randstad-PNG lijkt leeg.')
+            (OUT/'randstad-10dagen.png').write_bytes(big_bytes)
+            print(f'Randstad 10-daagse uit dezelfde scan: {len(big_bytes)} bytes, scan {regional["scanAt"]}',flush=True)
+            # Een simpele startpagina is vereist voor GitHub Pages. Deze bevat
+            # uitsluitend de twee publiek getoonde afbeeldingen, geen link
+            # naar de Ricoweer-app, broncode, caches of model-API's.
+            landing = """<!doctype html>
+<html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weerkaarten morgen en overmorgen</title>
+<style>body{max-width:920px;margin:20px auto;padding:0 12px;font:16px system-ui,sans-serif;background:#f2f7fb;color:#173b56}h1{font-size:24px}img{max-width:100%;height:auto;display:block;margin:20px auto;border-radius:12px}p{color:#456478}</style>
+</head><body><h1>Weerkaarten morgen en overmorgen</h1>
+<p>De kaarten worden meerdere keren per dag automatisch bijgewerkt.</p>
+<img src="morgen.png" alt="Landelijke weersverwachting voor morgen">
+<img src="overmorgen.png" alt="Landelijke weersverwachting voor overmorgen">
+<h2>Randstad · 10 dagen (zelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · tien dagen (compact)</h2><img src="randstad-10dagen-compact.png" alt="Tiendaagse weersverwachting voor de Randstad"><h2>Morgenkaart met tiendaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
+</body></html>"""
+            (OUT / 'index.html').write_text(landing, encoding='utf-8')
+            print("Succes: morgen.png, overmorgen.png, widget.png, randstad-5dagen.png (10 dagen, bestaande URL), randstad-10dagen-compact.png en randstad-10dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
         finally:
             await browser.close()
 
