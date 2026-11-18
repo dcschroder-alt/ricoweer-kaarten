@@ -110,9 +110,9 @@ WIDGET_VALIDATED_JS = """({cacheKey, date, maxAge, minPts}) => {
  if(!day||day.pts.filter(p=>Number.isFinite(p.tx)&&Number.isFinite(p.tn)).length<minPts)return false;
  const card=document.querySelector('#ricoLiveShell #ricoWeatherAtlas .ricoWeatherGrid > .ricoWeatherCard:first-child');
  const rows=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')];
- const dates=Array.from({length:10},(_,i)=>new Date(Date.parse(start+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
+ const dates=Array.from({length:15},(_,i)=>new Date(Date.parse(start+'T12:00:00Z')+i*86400000).toISOString().slice(0,10));
  return !!card&&card.querySelectorAll('.ricoWeatherPin').length>=7 &&
-        rows.length===10 && rows.every((r,i)=>r.dataset.date===dates[i]) &&
+        rows.length===15 && rows.every((r,i)=>r.dataset.date===dates[i]) &&
         !!document.querySelector('#ricoWidgetFacts .rico5DaySummary') &&
         document.querySelector('.ricoWidgetMode')!==null;
 }"""
@@ -277,7 +277,17 @@ async def make_images() -> None:
             widget_source=urlunparse(source_parts._replace(
                 path=source_parts.path[:-len('weerkaart.html')]+'widgetkaart.html',
                 query=f'publicatie={int(datetime.now().timestamp()*1000)}'))
+            # De landelijke kaart is al inhoudelijk gevalideerd. Deel exact deze
+            # modelmix met de widget (zelfde oorsprong, zelfde browsersessie).
+            # Zo wordt de widget niet afhankelijk van een tweede API-scan.
+            validated_scan = await page.evaluate("key => localStorage.getItem(key)", SCAN_KEY)
+            if not validated_scan:
+                raise RuntimeError('Gevalideerde landelijke scan niet meer beschikbaar.')
             widget_page=await context.new_page()
+            await widget_page.add_init_script("""(() => {
+              const data = __SCAN_DATA__;
+              try { localStorage.setItem(data.key, data.payload); } catch(e) {}
+            })();""".replace('__SCAN_DATA__', json.dumps({'key': SCAN_KEY, 'payload': validated_scan})))
             widget_response=await widget_page.goto(widget_source, wait_until='domcontentloaded',timeout=55000)
             if not widget_response or not widget_response.ok:
                 raise RuntimeError(f'Compacte bronpagina widgetkaart.html niet bereikbaar ({widget_response.status if widget_response else "geen reactie"}).')
@@ -295,6 +305,9 @@ async def make_images() -> None:
                         raise RuntimeError('Widgetpagina heeft na twee pogingen onvoldoende actuele dagmodelmix of kaartpunten.') from exc
                     print('Herstart widgetpagina voor nieuwe modelscan...',flush=True)
                     await widget_page.reload(wait_until='domcontentloaded',timeout=55000)
+            widget_stamp=await widget_page.evaluate("key => JSON.parse(localStorage.getItem(key)||'null')?.savedAt",SCAN_KEY)
+            if int(widget_stamp or 0)!=int(info['savedAt']):
+                raise RuntimeError('Widget gebruikt een andere scan dan de landelijke kaarten.')
             widget=widget_page.locator('#ricoLiveShell')
             await widget.scroll_into_view_if_needed()
             await widget_page.wait_for_timeout(1600)
@@ -302,7 +315,7 @@ async def make_images() -> None:
             facts=await widget_page.locator('#ricoWidgetFacts .rico5DayRow').count()
             size=await widget.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
             print('WordPress-zijbalkkaart:',quality,'facts:',facts,'grootte:',size,flush=True)
-            if quality['tiles']<7 or quality['pins']<7 or quality['width']<430 or quality['height']<560 or facts!=10 or size['w']<450:
+            if quality['tiles']<7 or quality['pins']<7 or quality['width']<430 or quality['height']<560 or facts!=15 or size['w']<450:
                 raise RuntimeError('De widget is onvolledig; huidige gepubliceerde afbeeldingen blijven behouden.')
             widget_destination=OUT/'widget.png'
             await widget.screenshot(path=str(widget_destination),type='png',animations='disabled',timeout=50000)
@@ -312,8 +325,8 @@ async def make_images() -> None:
             # Extra compacte tiendaagse zonder de grote landkaart. Deze versie past
             # in de smalle WordPress-widgetbalk. Exact dezelfde regionale dagmix.
             forecast=widget_page.locator('#ricoWidgetFacts')
-            if await forecast.locator('.rico5DayRow').count()!=10:
-                raise RuntimeError('Randstad 10-daagse onvolledig: publicatie gestopt.')
+            if await forecast.locator('.rico5DayRow').count()!=15:
+                raise RuntimeError('Randstad 15-daagse onvolledig: publicatie gestopt.')
             forecast_size=await forecast.evaluate('el=>({w:Math.round(el.getBoundingClientRect().width),h:Math.round(el.getBoundingClientRect().height)})')
             if forecast_size['w']<400 or forecast_size['h']<250:
                 raise RuntimeError('Randstad overzicht te klein; publicatie gestopt: '+str(forecast_size))
@@ -328,7 +341,7 @@ async def make_images() -> None:
     const description=(node.innerText||'').split('\n').map(x=>x.trim()).find(x=>/onweer|sneeuw|regenachtig|regen|buien|bui|zon|bewolk|grijs|mist|droog/i.test(x))||'';
     return {date:v('date'),type:(v('type')||description).toLowerCase(),max:num('max'),min:num('min'),rain:num('rain'),sun:num('sun')};
   });
-  if(rows.length!==10||rows.some(r=>!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(r.date)||!Number.isFinite(r.max)))throw Error('Onvolledige dagwaarden voor weerbericht');
+  if(rows.length!==15||rows.some(r=>!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(r.date)||!Number.isFinite(r.max)))throw Error('Onvolledige dagwaarden voor weerbericht');
   const day=r=>new Intl.DateTimeFormat('nl-NL',{weekday:'long',timeZone:'UTC'}).format(new Date(r.date+'T12:00:00Z'));
   const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
   const round=n=>Math.round(n);
@@ -361,14 +374,6 @@ async def make_images() -> None:
   const brighter=r=>hasSun(r)?r.sun>=3:['zon','zonwolken'].includes(kind(r));
   const sunny=r=>hasSun(r)?r.sun>=5:kind(r)==='zon';
   const tempRange=arr=>{const v=arr.map(r=>round(r.max));const lo=Math.min(...v),hi=Math.max(...v);return lo===hi?`${lo} graden`:hi-lo===1?`${lo} of ${hi} graden`:`${lo} tot ${hi} graden`;};
-  // De widget schuift om 18:00 uur naar morgen. Bepaal de labels op
-  // basis van de werkelijke eerste rij, niet op basis van de exporttijd alleen.
-  const nlDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-  const todayISO=/^\d{4}-\d{2}-\d{2}$/.test(nlDate)?nlDate:(()=>{const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const get=t=>parts.find(p=>p.type===t)?.value;return `${get('year')}-${get('month')}-${get('day')}`;})();
-  const nextISO=new Date(Date.parse(todayISO+'T12:00:00Z')+86400000).toISOString().slice(0,10);
-  const firstLabel=rows[0].date===todayISO?'Vandaag':rows[0].date===nextISO?'Morgen':null;
-  if(!firstLabel)throw Error('Tekstcontrole: eerste dag valt niet op vandaag of morgen');
-  const secondLabel=firstLabel==='Vandaag'?'Morgen':'Overmorgen';
   const today=rows[0],tomorrow=rows[1];
   const clause=r=>{
     if(veryWet(r))return 'valt geregeld regen';
@@ -389,20 +394,20 @@ async def make_images() -> None:
     if(today.max>=9&&tomorrow.max>=7)return `met ${x} graden minder zacht`;
     return delta>=-2?`met ${x} graden iets frisser`:`met ${x} graden duidelijk frisser`;
   };
-  const todayText=`${firstLabel} ${clause(today)} en wordt het ${round(today.max)} graden.`;
-  const tomorrowText=(veryWet(today)&&veryWet(tomorrow))?`${secondLabel} blijft het nat`:
-    (wetScore(today)===wetScore(tomorrow)&&kind(today)===kind(tomorrow))?`${secondLabel} ${clause(tomorrow)}`:
-    (wetScore(tomorrow)<wetScore(today))?`${secondLabel} wordt het droger en ${clause(tomorrow)}`:
-    `${secondLabel} ${clause(tomorrow)}`;
+  const todayText=`Vandaag ${clause(today)} en wordt het ${round(today.max)} graden.`;
+  const tomorrowText=(veryWet(today)&&veryWet(tomorrow))?'Morgen blijft het nat':
+    (wetScore(today)===wetScore(tomorrow)&&kind(today)===kind(tomorrow))?`Morgen ${clause(tomorrow)}`:
+    (wetScore(tomorrow)<wetScore(today))?`Morgen wordt het droger en ${clause(tomorrow)}`:
+    `Morgen ${clause(tomorrow)}`;
   const p1=`${todayText} ${tomorrowText} en wordt het ${tempTomorrow()}.`;
   // Perioden vormen op basis van samenhangende dagwaarden, niet losse trefwoorden.
   // Dag 3-5: eerst aanhoudend nat benoemen, daarna het omslagmoment.
-  const mid=rows.slice(2,5),later=rows.slice(5);
-  const transitionIndex=rows.slice(2,5).findIndex((r,j)=>{
+  const mid=rows.slice(2,10),later=rows.slice(10,15);
+  const transitionIndex=rows.slice(2,10).findIndex((r,j)=>{
     const i=j+2,prev=rows[i-1];
     const drier=wetScore(r)<=1&&wetScore(prev)>=2;
     const brightChange=brighter(r)&&(!brighter(prev)||(hasSun(r)&&hasSun(prev)&&r.sun>=prev.sun+2));
-    const persists=(i===4)||wetScore(rows[i+1])<=1;
+    const persists=(i===9)||wetScore(rows[i+1])<=1;
     return drier&&brightChange&&persists;
   });
   let p2='';
@@ -413,7 +418,7 @@ async def make_images() -> None:
     else if(prior.length&&prior.some(veryWet))p2=`${cap(day(rows[2]))} blijft het nog wisselvallig. `;
     p2+=`Vanaf ${day(rows[i])} wordt het droger en krijgt de zon meer ruimte.`;
     const following=rows[i+1];
-    if(i<=3&&following&&wetScore(following)<=1&&brighter(following))p2+=` Ook ${day(following)} zijn er zonnige perioden.`;
+    if(i<=8&&following&&wetScore(following)<=1&&brighter(following))p2+=` Ook ${day(following)} zijn er zonnige perioden.`;
   }else if(mid.filter(veryWet).length>=2){
     p2=`Ook ${day(mid[0])} en de dagen daarna valt geregeld regen.`;
   }else if(mid.filter(r=>wetScore(r)<=1&&brighter(r)).length>=2){
@@ -423,15 +428,15 @@ async def make_images() -> None:
   }else{
     p2=`Vanaf ${day(mid[0])} zijn er geregeld droge perioden${mid.some(brighter)?' met af en toe zon':''}.`;
   }
-  const firstAvg=rows.slice(0,5).reduce((n,r)=>n+r.max,0)/5;
+  const firstAvg=rows.slice(0,10).reduce((n,r)=>n+r.max,0)/10;
   const laterAvg=later.reduce((n,r)=>n+r.max,0)/5;
   const tempDiff=laterAvg-firstAvg;
   const wetLater=later.filter(veryWet).length;
   const showerLater=later.filter(r=>wetScore(r)===1).length;
   const sunLater=later.filter(brighter).length;
-  const weatherLater=wetLater>=3?'Verder vooruit blijft het wisselvallig met regelmatig regen.':
-    showerLater+wetLater>=3?'Verder vooruit wisselen droge perioden en enkele buien elkaar af.':
-    sunLater>=3?'Verder vooruit zijn er geregeld droge perioden met zon.':'Verder vooruit zijn er overwegend droge perioden.';
+  const weatherLater=wetLater>=3?'In dag 11–15 blijft het wisselvallig met regelmatig regen.':
+    showerLater+wetLater>=3?'In dag 11–15 wisselen droge perioden en enkele buien elkaar af.':
+    sunLater>=3?'In dag 11–15 zijn er geregeld droge perioden met zon.':'In dag 11–15 zijn er overwegend droge perioden.';
   const range=tempRange(later);
   const tempLater=tempDiff<=-3?`Het wordt minder zacht, met maxima van ${range}.`:
     tempDiff>=3?`Het wordt zachter, met maxima van ${range}.`:`De maxima liggen dan rond ${range}.`;
@@ -448,7 +453,7 @@ async def make_images() -> None:
     let note='';
     if(sunniest&&sunniest.sun>=5)note=`De meeste zon wordt ${day(sunniest)} verwacht (${round(sunniest.sun)} uur).`;
     else if(wettest&&wettest.rain>=8)note=`Vooral ${day(wettest)} kan veel regen vallen.`;
-    else note='De verwachting voor dag 6–10 is nog onzeker.';
+    else note='De verwachting voor dag 11–15 is extra onzeker.';
     summary.textContent=note;
   }
   for(const node of el.querySelectorAll('div,p,small,span')){
@@ -472,7 +477,7 @@ async def make_images() -> None:
   for(const str of texts){const p=document.createElement('p');p.textContent=str;p.style.cssText='margin:0 0 9px';box.appendChild(p);}
   box.lastElementChild.style.marginBottom='0';
   const firstRow=el.querySelector('.rico5DayRow');firstRow.parentNode.insertBefore(box,firstRow);
-  return {text:texts.join(' '),words:wordCount,firstType:today.type,firstCategory:kind(today),firstLabel,secondLabel};
+  return {text:texts.join(' '),words:wordCount,firstType:today.type,firstCategory:kind(today)};
 }""")
             # EC46: verse GitHub-browser heeft meestal geen localStorage-cache.
             # Gebruik de bestaande Ricoweer-functie; die hergebruikt cache indien aanwezig.
@@ -500,20 +505,22 @@ async def make_images() -> None:
                   }
                 }
                 const all=lr6BuildWeeks(pack.data,climate);
-                const future=lr6DisplayWeeks(all).filter(x=>!x.partial);
+                const lastDaily=document.querySelector('#ricoWidgetFacts .rico5DayRow:last-of-type')?.dataset.date ||
+                  [...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')].at(-1)?.dataset.date;
+                const future=lr6DisplayWeeks(all).filter(x=>!x.partial && (!lastDaily || x.start>lastDaily));
                 const wetValue=x=>{
                   const i=x.i,raw=pack.data.weekly?.precipitation_anomaly_gt0?.[i];
                   if(raw===null||raw===undefined||raw==='')return null;
                   const v=Number(raw);return Number.isFinite(v)?(v<=1?v*100:v):null;
                 };
-                result.weeks=future.slice(2,6).map(x=>({
+                result.weeks=future.slice(0,6).map(x=>({
                   start:x.start,end:x.end,
                   anomaly:Number.isFinite(x.tA)?x.tA:null,
                   txMin:Number.isFinite(x.txMin)?x.txMin:null,
                   txMax:Number.isFinite(x.txMax)?x.txMax:null,
                   wet:wetValue(x)
                 }));
-                if(!result.weeks.length)result.error='Geen bruikbare EC46-weken 3–6';
+                if(!result.weeks.length)result.error='Geen bruikbare EC46-weken na dag 15';
               }catch(e){result.error=String(e?.message||e)}
               return result;
             }""")
@@ -521,7 +528,7 @@ async def make_images() -> None:
             ec46_display = await forecast.evaluate(r"""(el,pack) => {
               const box=document.createElement('section');box.id='ricoExportEC46';
               box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:12px 15px;background:#f3f7ff;border:1px solid #c9d8ec;border-radius:12px;color:#17445f;font:14px/1.5 Arial,sans-serif';
-              const h=document.createElement('div');h.textContent='EC46 · vooruitblik week 3–6';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
+              const h=document.createElement('div');h.textContent='EC46 · weken na dag 15';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
               const lines=[];
               if(pack.weeks?.length){
                 for(const w of pack.weeks){
@@ -546,9 +553,10 @@ async def make_images() -> None:
             compact_file=OUT/'randstad-5dagen.png'
             await forecast.screenshot(path=str(compact_file),type='png',animations='disabled',timeout=50000)
             if compact_file.stat().st_size<12000:
-                raise RuntimeError('Randstad 10-daagse PNG lijkt leeg; publicatie gestopt.')
+                raise RuntimeError('Randstad 15-daagse PNG lijkt leeg; publicatie gestopt.')
             # Ook een logisch benoemde URL; de bestaande WordPress-afbeelding blijft werken.
             (OUT/'randstad-10dagen-compact.png').write_bytes(compact_file.read_bytes())
+            (OUT/'randstad-15dagen-compact.png').write_bytes(compact_file.read_bytes())
             print(f'Compacte Randstad-10-daagse gemaakt: {compact_file.name} ({compact_file.stat().st_size} bytes)',flush=True)
             # V101.0: publiceer ook de volledige Randstad 10-daagse uit DEZELFDE
             # landelijke scan als de widget. Geen tweede ophaalronde, geen andere
@@ -570,7 +578,7 @@ async def make_images() -> None:
             }""")
             big = regional['picture']
             compact = regional['compact']
-            if len(big['rows']) != 10 or len(compact) != 10:
+            if len(big['rows']) != 15 or len(compact) != 15:
                 raise RuntimeError('Randstadkaart en widget hebben niet het juiste aantal dagen.')
             def near(a,b):
                 if a is None or b is None: return a is b
@@ -580,7 +588,7 @@ async def make_images() -> None:
                     if not (near(a.get(field),b.get(field)) if field not in ('date','type') else a.get(field)==b.get(field)):
                         raise RuntimeError(f'Randstadkaart en widget verschillen op {a.get("date")} veld {field}: {a.get(field)} vs {b.get(field)}.')
             if not str(big['dataUrl']).startswith('data:image/png;base64,'):
-                raise RuntimeError('De Randstad 10-daagse leverde geen geldige PNG.')
+                raise RuntimeError('De Randstad 15-daagse leverde geen geldige PNG.')
             # Plaats hetzelfde weerbericht ook BOVEN de volledige Randstad-PNG.
             # Zo toont de bestaande WordPress-URL randstad-10dagen.png de tekst.
             # Compositie gebeurt lokaal in de browser; geen extra weer-API-calls.
@@ -613,7 +621,7 @@ async def make_images() -> None:
                 return result;
               }
               const lines=ptexts.map(wrap);
-              if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 3–6'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
+              if(ec46Lines.length){lines.push(wrap('EC46 · weken na dag 15'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
               const headingHeight=Math.round(58*scale);
               const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
               const topHeight=pad+headingHeight+textHeight+pad;
@@ -636,7 +644,8 @@ async def make_images() -> None:
             if len(big_bytes) < 50000:
                 raise RuntimeError('De volledige Randstad-PNG lijkt leeg.')
             (OUT/'randstad-10dagen.png').write_bytes(big_bytes)
-            print(f'Randstad 10-daagse uit dezelfde scan: {len(big_bytes)} bytes, scan {regional["scanAt"]}',flush=True)
+            (OUT/'randstad-15dagen.png').write_bytes(big_bytes)
+            print(f'Randstad 15-daagse uit dezelfde scan: {len(big_bytes)} bytes, scan {regional["scanAt"]}',flush=True)
             # Een simpele startpagina is vereist voor GitHub Pages. Deze bevat
             # uitsluitend de twee publiek getoonde afbeeldingen, geen link
             # naar de Ricoweer-app, broncode, caches of model-API's.
@@ -649,7 +658,7 @@ async def make_images() -> None:
 <p>De kaarten worden meerdere keren per dag automatisch bijgewerkt.</p>
 <img src="morgen.png" alt="Landelijke weersverwachting voor morgen">
 <img src="overmorgen.png" alt="Landelijke weersverwachting voor overmorgen">
-<h2>Randstad · 10 dagen (zelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · tien dagen (compact)</h2><img src="randstad-10dagen-compact.png" alt="Tiendaagse weersverwachting voor de Randstad"><h2>Morgenkaart met tiendaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
+<h2>Randstad · 15 dagen (zelfde scan)</h2><img src="randstad-15dagen.png" alt="Vijftien dagen Randstad"><h2>Randstad · vijftien dagen (compact)</h2><img src="randstad-15dagen-compact.png" alt="Vijftiendaagse weersverwachting voor de Randstad"><h2>Morgenkaart met vijftiendaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
 </body></html>"""
             (OUT / 'index.html').write_text(landing, encoding='utf-8')
             print("Succes: morgen.png, overmorgen.png, widget.png, randstad-5dagen.png (10 dagen, bestaande URL), randstad-10dagen-compact.png en randstad-10dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
