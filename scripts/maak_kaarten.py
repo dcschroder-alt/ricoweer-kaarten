@@ -621,9 +621,9 @@ async def make_images() -> None:
                  const range=node.querySelector('.rico5DayRange');
                  const windRange=node.querySelector('.rico5DayWindRange');
                  const reason=node.querySelector('.rico5DayReason');
-                 return c?`${node.dataset.date.slice(5)}: ${range?.textContent.trim()||''} · ${windRange?.textContent.trim()||''} · ${c.textContent.replace('🎯 ','').trim()} · ${reason?.textContent.trim()||''}`:'';
+                 return c?`${node.dataset.date.slice(5)}: ${range?.textContent.trim()||''} · ${windRange?.textContent.trim()||''} · ${c.textContent.replace('🎯 ','').trim()}${reason?' · '+reason.textContent.trim():''}`:'';
               }).filter(Boolean);
-              if(risks.length!==5||confidence.length!==10)
+              if(risks.length!==6||confidence.length!==10)
                  throw new Error('Kansenblok of dagelijkse modelzekerheid ontbreekt bij PNG-compositie');
               lines.push(wrap('Weerkansen · hoogste modelondersteuning in 10 dagen'));
               for(const r of risks)lines.push(wrap(r));
