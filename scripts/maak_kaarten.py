@@ -606,6 +606,21 @@ async def make_images() -> None:
               }
               const lines=ptexts.map(wrap);
               if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 3–6'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
+              // Het risicoblok en de dagelijkse modelzekerheid horen ook bij
+              // de volledige WordPress-PNG, niet alleen de compacte variant.
+              const risks=[...document.querySelectorAll('#ricoWidgetFacts .ricoRiskItem')].map(node=>
+                 (node.innerText||'').replace(/\s*\n\s*/g,' · ').replace(/\s+/g,' ').trim());
+              const confidence=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')].map(node=>{
+                 const c=node.querySelector('.rico5DayConfidence');
+                 return c?`${node.dataset.date.slice(5)}: ${c.textContent.replace('🎯 ','').trim()}`:'';
+              }).filter(Boolean);
+              if(risks.length!==6||confidence.length!==10)
+                 throw new Error('Kansenblok of dagelijkse modelzekerheid ontbreekt bij PNG-compositie');
+              lines.push(wrap('Weerkansen · hoogste modelondersteuning in 10 dagen'));
+              for(const r of risks)lines.push(wrap(r));
+              lines.push(wrap('Modelzekerheid per dag:'));
+              for(let i=0;i<confidence.length;i+=2)lines.push(wrap(confidence.slice(i,i+2).join('  |  ')));
+              lines.push(wrap('Modelondersteuning is geen gekalibreerde ensemblekans; onbeschikbare waarden niet als 0%.'));
               const headingHeight=Math.round(58*scale);
               const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
               const topHeight=pad+headingHeight+textHeight+pad;
