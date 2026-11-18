@@ -425,8 +425,13 @@ async def make_images() -> None:
     showerLater+wetLater>=3?'Verder vooruit wisselen droge perioden en enkele buien elkaar af.':
     sunLater>=3?'Verder vooruit zijn er geregeld droge perioden met zon.':'Verder vooruit zijn er overwegend droge perioden.';
   const range=tempRange(later);
+  const laterTemps=later.map(r=>round(r.max));
+  const laterLo=Math.min(...laterTemps),laterHi=Math.max(...laterTemps);
+  const steadyRange=laterLo===laterHi?`rond ${laterLo} graden`:
+    laterHi-laterLo===1?`op ${laterLo} of ${laterHi} graden`:
+    `tussen ${laterLo} en ${laterHi} graden`;
   const tempLater=tempDiff<=-3?`Het wordt minder zacht, met maxima van ${range}.`:
-    tempDiff>=3?`Het wordt zachter, met maxima van ${range}.`:`De maxima liggen dan rond ${range}.`;
+    tempDiff>=3?`Het wordt zachter, met maxima van ${range}.`:`De maxima liggen dan ${steadyRange}.`;
   let p3=`${weatherLater} ${tempLater}`;
   const lows=rows.slice(2).filter(r=>Number.isFinite(r.min));
   const min=lows.length?Math.min(...lows.map(r=>r.min)):null;
@@ -498,14 +503,15 @@ async def make_images() -> None:
                   if(raw===null||raw===undefined||raw==='')return null;
                   const v=Number(raw);return Number.isFinite(v)?(v<=1?v*100:v):null;
                 };
-                result.weeks=future.slice(2,6).map(x=>({
+                result.weeks=future.slice(1,6).map((x,i)=>({
+                  week:i+2,
                   start:x.start,end:x.end,
                   anomaly:Number.isFinite(x.tA)?x.tA:null,
                   txMin:Number.isFinite(x.txMin)?x.txMin:null,
                   txMax:Number.isFinite(x.txMax)?x.txMax:null,
                   wet:wetValue(x)
                 }));
-                if(!result.weeks.length)result.error='Geen bruikbare EC46-weken 3–6';
+                if(!result.weeks.length)result.error='Geen bruikbare EC46-weken 2–6';
               }catch(e){result.error=String(e?.message||e)}
               return result;
             }""")
@@ -513,19 +519,19 @@ async def make_images() -> None:
             ec46_display = await forecast.evaluate(r"""(el,pack) => {
               const box=document.createElement('section');box.id='ricoExportEC46';
               box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:12px 15px;background:#f3f7ff;border:1px solid #c9d8ec;border-radius:12px;color:#17445f;font:14px/1.5 Arial,sans-serif';
-              const h=document.createElement('div');h.textContent='EC46 · vooruitblik week 3–6';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
+              const h=document.createElement('div');h.textContent='EC46 · vooruitblik week 2–6';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
               const lines=[];
               if(pack.weeks?.length){
                 for(const w of pack.weeks){
                   const temp=w.anomaly>=.4?'warmer':w.anomaly<=-.4?'kouder':'rond normaal';
-                  const delta=(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C';
+                  const delta=Number.isFinite(w.anomaly)?(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C':null;
                   const hasMax=Number.isFinite(w.txMin)&&Number.isFinite(w.txMax);
                   const actual=hasMax
                     ?`maxima ${Math.floor(Math.min(w.txMin,w.txMax))} tot ${Math.ceil(Math.max(w.txMin,w.txMax))} °C`
-                    :`${temp} (${delta} t.o.v. normaal; maxima niet beschikbaar)`;
+                    :delta?`${temp} (${delta} t.o.v. normaal; maxima niet beschikbaar)`:'Maxima en temperatuurafwijking niet beschikbaar';
                   const rain=w.wet===null?'':w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
                   const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
-                  lines.push(`${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain}`);
+                  lines.push(`Week ${w.week} · ${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain}`);
                 }
               }else lines.push('EC46-vooruitblik tijdelijk niet beschikbaar.');
               for(const line of lines){const d=document.createElement('div');d.textContent=line;d.style.cssText='padding:5px 0;border-bottom:1px solid #dbe5f0';box.appendChild(d)}
@@ -605,7 +611,7 @@ async def make_images() -> None:
                 return result;
               }
               const lines=ptexts.map(wrap);
-              if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 3–6'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
+              if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 2–6'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
               // Het risicoblok en de dagelijkse modelzekerheid horen ook bij
               // de volledige WordPress-PNG, niet alleen de compacte variant.
               const risks=[...document.querySelectorAll('#ricoWidgetFacts .ricoRiskItem')].map(node=>
@@ -614,7 +620,7 @@ async def make_images() -> None:
                  const c=node.querySelector('.rico5DayConfidence');
                  return c?`${node.dataset.date.slice(5)}: ${c.textContent.replace('🎯 ','').trim()}`:'';
               }).filter(Boolean);
-              if(risks.length!==6||confidence.length!==10)
+              if(risks.length!==5||confidence.length!==10)
                  throw new Error('Kansenblok of dagelijkse modelzekerheid ontbreekt bij PNG-compositie');
               lines.push(wrap('Weerkansen · hoogste modelondersteuning in 10 dagen'));
               for(const r of risks)lines.push(wrap(r));
