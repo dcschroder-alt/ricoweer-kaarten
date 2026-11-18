@@ -377,15 +377,15 @@ async def make_images() -> None:
     const x=round(tomorrow.max);
     if(delta===0)return `opnieuw ${x} graden`;
     if(delta>0)return delta<=2?`met ${x} graden iets zachter`:`met ${x} graden duidelijk zachter`;
-    if(today.max>=10&&tomorrow.max>=10)return delta>=-2?`met ${x} graden iets minder zacht`:`met ${x} graden minder zacht`;
-    if(today.max>=9&&tomorrow.max>=7)return `met ${x} graden minder zacht`;
-    return delta>=-2?`met ${x} graden iets frisser`:`met ${x} graden duidelijk frisser`;
+    if(x<=6)return `${x} graden, ${delta<=-3?'duidelijk':'wat'} kouder dan ${day(today)}`;
+    return `${x} graden, ${delta<=-3?'duidelijk':'wat'} kouder dan ${day(today)}`;
   };
-  const todayText=`Vandaag ${clause(today)} en wordt het ${round(today.max)} graden.`;
-  const tomorrowText=(veryWet(today)&&veryWet(tomorrow))?'Morgen blijft het nat':
-    (wetScore(today)===wetScore(tomorrow)&&kind(today)===kind(tomorrow))?`Morgen ${clause(tomorrow)}`:
-    (wetScore(tomorrow)<wetScore(today))?`Morgen wordt het droger en ${clause(tomorrow)}`:
-    `Morgen ${clause(tomorrow)}`;
+  const todayText=`${cap(day(today))} ${clause(today)} en wordt het ${round(today.max)} graden.`;
+  const tomorrowDay=cap(day(tomorrow));
+  const tomorrowText=(veryWet(today)&&veryWet(tomorrow))?`${tomorrowDay} blijft het nat`:
+    (wetScore(today)===wetScore(tomorrow)&&kind(today)===kind(tomorrow))?`${tomorrowDay} ${clause(tomorrow)}`:
+    (wetScore(tomorrow)<wetScore(today))?`${tomorrowDay} wordt het droger en ${clause(tomorrow)}`:
+    `${tomorrowDay} ${clause(tomorrow)}`;
   const p1=`${todayText} ${tomorrowText} en wordt het ${tempTomorrow()}.`;
   // Perioden vormen op basis van samenhangende dagwaarden, niet losse trefwoorden.
   // Dag 3-5: eerst aanhoudend nat benoemen, daarna het omslagmoment.
@@ -430,7 +430,7 @@ async def make_images() -> None:
   const steadyRange=laterLo===laterHi?`rond ${laterLo} graden`:
     laterHi-laterLo===1?`op ${laterLo} of ${laterHi} graden`:
     `tussen ${laterLo} en ${laterHi} graden`;
-  const tempLater=tempDiff<=-3?`Het wordt minder zacht, met maxima van ${range}.`:
+  const tempLater=tempDiff<=-3?`Het wordt kouder, met maxima van ${range}.`:
     tempDiff>=3?`Het wordt zachter, met maxima van ${range}.`:`De maxima liggen dan ${steadyRange}.`;
   let p3=`${weatherLater} ${tempLater}`;
   const lows=rows.slice(2).filter(r=>Number.isFinite(r.min));
