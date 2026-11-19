@@ -541,73 +541,6 @@ async def make_images() -> None:
             print('Randstad-weerbericht:',json.dumps(narrative,ensure_ascii=False),flush=True)
             if narrative['words'] < 25 or narrative['words'] > 145:
                 raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
-            # Compacte 10-daagse grafiek, gebaseerd op DEZELFDE tien dagrijen als
-            # de WordPress-verwachting. Bewust 2 x 5 om mobiel leesbaar te blijven.
-            glance = await forecast.evaluate(r"""el => {
-              const nodes=[...el.querySelectorAll('.rico5DayRow')];
-              if(nodes.length!==10)throw Error('Oogopslag: geen tien complete dagrijen');
-              const value=(n,key)=>{const v=n.dataset[key];return v==null||v===''?NaN:Number(v)};
-              const rows=nodes.map(n=>({date:n.dataset.date,max:value(n,'max'),min:value(n,'min'),rain:value(n,'rain'),sun:value(n,'sun'),type:n.dataset.type||''}));
-              if(rows.some(r=>!Number.isFinite(r.max)||!Number.isFinite(r.min)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(r.date)))
-                throw Error('Oogopslag: onvolledige dagwaarden');
-              const maxRain=Math.max(1,...rows.map(r=>Number.isFinite(r.rain)?r.rain:0));
-              const day=d=>new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
-              const icon=r=>{
-                if(/sneeuw/i.test(r.type))return '🌨️';
-                if(/onweer/i.test(r.type))return '⛈️';
-                if(Number.isFinite(r.rain)&&r.rain>=3)return '🌧️';
-                if(Number.isFinite(r.rain)&&r.rain>=.3)return '🌦️';
-                if(Number.isFinite(r.sun)&&r.sun>=5)return '☀️';
-                return '⛅';
-              };
-              const card=document.createElement('section');card.id='ricoExportGlance';
-              card.setAttribute('aria-label','Randstad tien dagen in een oogopslag');
-              card.innerHTML='<div class="ricoGlanceHeading">📊 Randstad in één oogopslag · 10 dagen</div><div class="ricoGlanceGrid"></div><div class="ricoGlanceNote">Rood: maximum · blauw: minimum · blauwe balk: neerslag. Dagwaarden uit dezelfde Randstad-modelscan.</div>';
-              const style=document.createElement('style');style.id='ricoGlanceCSS';style.textContent=`
-                #ricoWidgetFacts #ricoExportGlance{box-sizing:border-box;margin:10px 8px 12px;padding:12px 9px;background:#ecf4fa;border:1px solid #c6dce9;border-radius:13px;color:#17445f;font-family:Arial,sans-serif}
-                #ricoWidgetFacts .ricoGlanceHeading{font-weight:800;font-size:16px;margin-bottom:9px;color:#07527a}
-                #ricoWidgetFacts .ricoGlanceGrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}
-                #ricoWidgetFacts .ricoGlanceDay{min-width:0;box-sizing:border-box;padding:7px 2px 6px;background:#fff;border:1px solid #d7e5ee;border-radius:9px;display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center}
-                #ricoWidgetFacts .ricoGlanceDay:nth-child(n+6){background:#f7fafe}
-                #ricoWidgetFacts .ricoGlanceDate{font-size:11px;font-weight:800;white-space:nowrap;color:#25435e}
-                #ricoWidgetFacts .ricoGlanceIcon{font-size:19px;line-height:23px}
-                #ricoWidgetFacts .ricoGlanceTemp{display:flex;gap:3px;align-items:baseline;white-space:nowrap;font-size:13px;font-weight:800}
-                #ricoWidgetFacts .ricoGlanceMax{color:#b83b3c;font-size:16px}
-                #ricoWidgetFacts .ricoGlanceMin{color:#1167a4}
-                #ricoWidgetFacts .ricoGlanceRainTrack{height:5px;width:88%;background:#dce9f4;border-radius:5px;overflow:hidden}
-                #ricoWidgetFacts .ricoGlanceRainFill{height:100%;background:#2d94d1;border-radius:5px}
-                #ricoWidgetFacts .ricoGlanceMM{font-size:10px;color:#4e6881;white-space:nowrap}
-                #ricoWidgetFacts .ricoGlanceNote{font-size:10px;line-height:1.35;margin-top:8px;color:#5c7286}
-              `;
-              el.prepend(style);
-              for(const r of rows){
-                const d=document.createElement('div');d.className='ricoGlanceDay';
-                const date=document.createElement('div');date.className='ricoGlanceDate';date.textContent=day(r.date);
-                const ico=document.createElement('div');ico.className='ricoGlanceIcon';ico.textContent=icon(r);
-                const temp=document.createElement('div');temp.className='ricoGlanceTemp';
-                temp.innerHTML=`<span class="ricoGlanceMax">${Math.round(r.max)}°</span><span class="ricoGlanceMin">${Math.round(r.min)}°</span>`;
-                const track=document.createElement('div');track.className='ricoGlanceRainTrack';
-                const fill=document.createElement('div');fill.className='ricoGlanceRainFill';
-                fill.style.width=Number.isFinite(r.rain)?Math.max(0,Math.min(100,100*r.rain/maxRain))+'%':'0%';track.appendChild(fill);
-                const mm=document.createElement('div');mm.className='ricoGlanceMM';
-                mm.textContent=Number.isFinite(r.rain)?r.rain.toLocaleString('nl-NL',{maximumFractionDigits:1})+' mm':'—';
-                d.append(date,ico,temp,track,mm);card.querySelector('.ricoGlanceGrid').appendChild(d);
-              }
-              const narrative=el.querySelector('#ricoExportRandstadNarrative');
-              if(!narrative)throw Error('Oogopslag: weerbericht ontbreekt');
-              narrative.insertAdjacentElement('beforebegin',card);
-              return {days:rows.length,dates:rows.map(r=>r.date)};
-            }""")
-            print('Randstad in een oogopslag:',json.dumps(glance,ensure_ascii=False),flush=True)
-            # Ook als zelfstandig PNG beschikbaar, zonder extra WordPress-invoeging
-            # nodig te hebben: de grafiek wordt al boven de bestaande verwachting
-            # vastgelegd in randstad-5dagen.png en randstad-10dagen-compact.png.
-            glance_box=forecast.locator('#ricoExportGlance')
-            glance_file=OUT/'randstad-10dagen-oogopslag.png'
-            await glance_box.screenshot(path=str(glance_file),type='png',animations='disabled',timeout=50000)
-            if glance_file.stat().st_size<4000:
-                raise RuntimeError('Oogopslag-PNG lijkt leeg; publicatie gestopt.')
-            glance_data_url='data:image/png;base64,'+base64.b64encode(glance_file.read_bytes()).decode('ascii')
             compact_file=OUT/'randstad-5dagen.png'
             await forecast.screenshot(path=str(compact_file),type='png',animations='disabled',timeout=50000)
             if compact_file.stat().st_size<12000:
@@ -649,13 +582,10 @@ async def make_images() -> None:
             # Plaats hetzelfde weerbericht ook BOVEN de volledige Randstad-PNG.
             # Zo toont de bestaande WordPress-URL randstad-10dagen.png de tekst.
             # Compositie gebeurt lokaal in de browser; geen extra weer-API-calls.
-            combined_url = await widget_page.evaluate(r"""async ({imageUrl, text, glanceUrl}) => {
+            combined_url = await widget_page.evaluate(r"""async ({imageUrl, text}) => {
               const image = new Image();
               image.src = imageUrl;
               await image.decode();
-              const glanceImage = new Image();
-              glanceImage.src = glanceUrl;
-              await glanceImage.decode();
               const width = image.naturalWidth;
               const scale = width / 1000;
               const canvas = document.createElement('canvas');
@@ -702,24 +632,20 @@ async def make_images() -> None:
               lines.push(wrap('Modelondersteuning is geen gekalibreerde ensemblekans; onbeschikbare waarden niet als 0%.'));
               const headingHeight=Math.round(58*scale);
               const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
-              const glanceHeight=Math.round(inner*glanceImage.naturalHeight/glanceImage.naturalWidth);
-              const glanceGap=Math.round(20*scale);
-              const topHeight=pad+headingHeight+glanceHeight+glanceGap+textHeight+pad;
+              const topHeight=pad+headingHeight+textHeight+pad;
               canvas.width=width;canvas.height=topHeight+image.naturalHeight;
               ctx.fillStyle='#eaf4fa';ctx.fillRect(0,0,width,topHeight);
               ctx.fillStyle='#07527a';ctx.font=`bold ${Math.round(34*scale)}px Arial`;
               ctx.fillText('Weerbericht Randstad',pad,pad+Math.round(32*scale));
               ctx.fillStyle='#17445f';ctx.font=`${Math.round(23*scale)}px Arial`;
-              const glanceTop=pad+headingHeight;
-              ctx.drawImage(glanceImage,pad,glanceTop,inner,glanceHeight);
-              let y=glanceTop+glanceHeight+glanceGap;
+              let y=pad+headingHeight;
               for(const group of lines){
                 for(const line of group){ctx.fillText(line,pad,y);y+=lineHeight;}
                 y+=Math.round(19*scale);
               }
               ctx.drawImage(image,0,topHeight);
               return canvas.toDataURL('image/png');
-            }""", {'imageUrl':big['dataUrl'],'text':narrative['text'],'glanceUrl':glance_data_url})
+            }""", {'imageUrl':big['dataUrl'],'text':narrative['text']})
             if not combined_url.startswith('data:image/png;base64,'):
                 raise RuntimeError('Volledige Randstad-PNG met weerbericht is ongeldig.')
             big_bytes = base64.b64decode(combined_url.split(',',1)[1], validate=True)
@@ -739,10 +665,10 @@ async def make_images() -> None:
 <p>De kaarten worden meerdere keren per dag automatisch bijgewerkt.</p>
 <img src="morgen.png" alt="Landelijke weersverwachting voor morgen">
 <img src="overmorgen.png" alt="Landelijke weersverwachting voor overmorgen">
-<h2>Randstad · 10 dagen in één oogopslag</h2><img src="randstad-10dagen-oogopslag.png" alt="Randstadgrafiek met tien dagen in één oogopslag"><h2>Randstad · 10 dagen (zelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · tien dagen (compact)</h2><img src="randstad-10dagen-compact.png" alt="Tiendaagse weersverwachting voor de Randstad"><h2>Morgenkaart met tiendaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
+<h2>Randstad · 10 dagen (zelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · tien dagen (compact)</h2><img src="randstad-10dagen-compact.png" alt="Tiendaagse weersverwachting voor de Randstad"><h2>Morgenkaart met tiendaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
 </body></html>"""
             (OUT / 'index.html').write_text(landing, encoding='utf-8')
-            print("Succes: morgen.png, overmorgen.png, widget.png, randstad-10dagen-oogopslag.png, randstad-5dagen.png (10 dagen, bestaande URL), randstad-10dagen-compact.png en randstad-10dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
+            print("Succes: morgen.png, overmorgen.png, widget.png, randstad-5dagen.png (10 dagen, bestaande URL), randstad-10dagen-compact.png en randstad-10dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
         finally:
             await browser.close()
 
