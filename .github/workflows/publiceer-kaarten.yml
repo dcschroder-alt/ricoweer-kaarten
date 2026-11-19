@@ -1,12 +1,13 @@
 name: Ricoweer - kaarten voor WordPress
 
+
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 0,5,8,11,14,17,20 * * *'
-    timezone 'Europe/Amsterdam'
+      timezone: 'Europe/Amsterdam'
     - cron: '30 1 * * *'
-    timezone 'Europe/Amsterdam'
+      timezone: 'Europe/Amsterdam'
 
 permissions:
   contents: read
