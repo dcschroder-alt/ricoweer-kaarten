@@ -1,0 +1,63 @@
+name: Ricoweer - kaarten voor WordPress
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Vast publicatieschema in Nederlandse tijd (CET/CEST).
+    # GitHub verwerkt zomer-/wintertijd via Europe/Amsterdam.
+    # GitHub Actions kan geplande runs vertragen of incidenteel overslaan.
+    - cron: '0 0,5,8,11,14,17,20 * * *'
+      timezone: 'Europe/Amsterdam'
+    - cron: '30 1 * * *'
+      timezone: 'Europe/Amsterdam'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: ricoweer-kaart-publicatie
+  cancel-in-progress: false
+
+jobs:
+  publiceer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Toon aanleiding voor de publicatie
+        run: |
+          echo "Startwijze: ${{ github.event_name }}"
+          echo "Nederlandse tijd: $(TZ=Europe/Amsterdam date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "Branch: ${{ github.ref_name }}"
+      - name: Haal exportcode op
+        uses: actions/checkout@v4
+      - name: Activeer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Installeer Playwright en Chromium
+        run: |
+          python -m pip install -r requirements.txt
+          python -m playwright install chromium
+      - name: Controleer exporter
+        run: python -m py_compile scripts/maak_kaarten.py
+      - name: Genereer kaarten met de Ricoweer-dagmodelmix
+        run: python scripts/maak_kaarten.py
+        env:
+          SOURCE_MAP_URL: https://dcschroder-alt.github.io/Regioweer/weerkaart.html
+          OUTPUT_DIR: public
+      - name: Configureer GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload de PNG's
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+      - name: Publiceer de afbeeldingen
+        id: deployment
+        uses: actions/deploy-pages@v4
