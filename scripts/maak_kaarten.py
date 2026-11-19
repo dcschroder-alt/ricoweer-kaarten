@@ -623,13 +623,22 @@ async def make_images() -> None:
                  const reason=node.querySelector('.rico5DayReason');
                  return c?`${node.dataset.date.slice(5)}: ${range?.textContent.trim()||''} · ${windRange?.textContent.trim()||''} · ${c.textContent.replace('🎯 ','').trim()}${reason?' · '+reason.textContent.trim():''}`:'';
               }).filter(Boolean);
-              if(risks.length!==6||confidence.length!==10)
-                 throw new Error('Kansenblok of dagelijkse modelzekerheid ontbreekt bij PNG-compositie');
-              lines.push(wrap('Weerkansen · hoogste modelondersteuning in 10 dagen'));
-              for(const r of risks)lines.push(wrap(r));
-              lines.push(wrap('Modelrange maxima, windrange en belangrijkste onzekerheid per dag:'));
-              for(let i=0;i<confidence.length;i+=2)lines.push(wrap(confidence.slice(i,i+2).join('  |  ')));
-              lines.push(wrap('Modelondersteuning is geen gekalibreerde ensemblekans; onbeschikbare waarden niet als 0%.'));
+              // Deze optionele toelichting mag de volledige PNG niet blokkeren.
+              // De actuele 10 dagrijen, modelscan en PNG zelf zijn hierboven al gevalideerd.
+              // Toon uitsluitend gegevens die daadwerkelijk op de pagina staan.
+              if(risks.length){
+                lines.push(wrap('Weerkansen · hoogste modelondersteuning in 10 dagen'));
+                for(const r of risks)lines.push(wrap(r));
+                lines.push(wrap('Modelondersteuning is geen gekalibreerde ensemblekans; ontbrekende gegevens zijn niet 0%.'));
+              }
+              if(confidence.length){
+                lines.push(wrap('Modelrange maxima, windrange en belangrijkste onzekerheid per beschikbare dag:'));
+                for(let i=0;i<confidence.length;i+=2)lines.push(wrap(confidence.slice(i,i+2).join('  |  ')));
+              }
+              if(risks.length!==6||confidence.length!==10){
+                console.warn('PNG: niet alle aanvullende kans-/zekerheidsregels aanwezig; bestaande dagverwachting behouden',
+                  {riskItems:risks.length,confidenceDays:confidence.length});
+              }
               const headingHeight=Math.round(58*scale);
               const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
               const topHeight=pad+headingHeight+textHeight+pad;
