@@ -636,8 +636,54 @@ async def make_images() -> None:
       return data;
     }finally{clearTimeout(timer)}
   };
+  // Snow depth is a *state* (metres on the ground), not the daily snowfall total.
+  // Fetch separately: a model lacking snow_depth must never disable other plumes.
+  const fetchSnowDepth=async model=>{
+    const q=new URLSearchParams({
+      latitude:places.map(p=>p.lat).join(','),longitude:places.map(p=>p.lon).join(','),
+      hourly:'snow_depth',models:model,timezone:'Europe/Amsterdam',forecast_days:'12'
+    });
+    const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),10000);
+    try{
+      const response=await fetch('https://ensemble-api.open-meteo.com/v1/ensemble?'+q.toString(),
+        {signal:ctl.signal,cache:'no-store'});
+      if(!response.ok)throw new Error('HTTP '+response.status);
+      const body=await response.json(),sites=Array.isArray(body)?body:[body];
+      if(sites.length!==places.length)throw new Error('onvolledige sneeuwdekrespons');
+      const suffixes=Object.keys(sites[0].hourly||{}).filter(k=>/^snow_depth_member\d+$/.test(k))
+        .map(k=>k.slice('snow_depth_'.length))
+        .filter(s=>sites.every(site=>Array.isArray(site.hourly?.['snow_depth_'+s])));
+      if(suffixes.length<5)throw new Error('onvoldoende sneeuwdek-ensembleleden');
+      const days={};
+      for(const date of dates){
+        // Snapshot at 08:00 Europe/Amsterdam: a comparable morning snow cover,
+        // not a sum of snowfalls or the largest depth at any arbitrary hour.
+        const indices=sites.map(site=>(site.hourly.time||[]).findIndex(t=>
+          String(t).startsWith(date+'T08:')));
+        const values=[];
+        for(const s of suffixes){
+          const region=[];
+          for(let j=0;j<sites.length;j++){
+            if(indices[j]<0)continue;
+            const v=sites[j].hourly['snow_depth_'+s][indices[j]];
+            if(Number.isFinite(v)&&v>=0)region.push(v*100); // metres -> cm
+          }
+          if(region.length<2)continue;
+          region.sort((a,b)=>a-b);
+          values.push(region[Math.floor(region.length/2)]);
+        }
+        days[date]={snowDepth:values};
+      }
+      return {model,days};
+    }finally{clearTimeout(timer)}
+  };
   const results=await Promise.all(models.map(async m=>{
-    try{return await fetchModel(m)}catch(err){console.warn('Randstad pluimbron niet bereikbaar',m,String(err));return null}
+    const [base,depth]=await Promise.all([
+      fetchModel(m).catch(err=>{console.warn('Randstad pluimbron niet bereikbaar',m,String(err));return null}),
+      fetchSnowDepth(m).catch(err=>{console.warn('Sneeuwdekbron niet beschikbaar',m,String(err));return null})
+    ]);
+    if(base&&depth){for(const date of dates)base.days[date].snowDepth=depth.days[date]?.snowDepth||[];}
+    return base;
   }));
   const available=results.filter(Boolean);
   const percentage=(variable,condition,date)=>{
@@ -658,7 +704,10 @@ async def make_images() -> None:
   // Only the documented three plots, based on actual members from 2–3 representative points.
   const charts=winter?[
     {title:'❄️ Vorst- en ijsdagkans',detail:'Vorst: minimum < 0 °C · IJsdag: maximum < 0 °C',field:'tn',test:x=>x<0,otherField:'tx',otherTest:x=>x<0,kind:'dual-chance',color:'#267acb',otherColor:'#174c93'},
-    {title:'🌨️ Sneeuwkans',detail:'Minstens 0,1 cm sneeuwval',field:'snow',test:x=>x>=.1,kind:'chance',color:'#5897cb'},
+    {title:'🌨️ Sneeuwval en sneeuwdek',detail:'Sneeuwval ≥ 0,1 cm per dag · sneeuwdek ≥ 1 cm om 08:00 uur',
+      field:'snow',test:x=>x>=.1,otherField:'snowDepth',otherTest:x=>x>=1,
+      kind:'dual-chance',color:'#5897cb',otherColor:'#174c93',
+      labels:['Sneeuwval (≥ 0,1 cm)','Sneeuwdek (≥ 1 cm, 08:00)']},
     {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima · P20–P80 en mediaan',kind:'temp',color:'#c95746'}
   ]:[
     {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima · P20–P80 en mediaan',kind:'temp',color:'#c95746'},
@@ -740,12 +789,42 @@ async def make_images() -> None:
       if(chart.kind==='dual-chance'){
         const legend=document.createElement('div');
         legend.style.cssText='display:flex;flex-wrap:wrap;gap:12px;padding:2px 9px 5px;font-size:11px;color:#34536d';
-        for(const [label,color] of [['Vorst (TN < 0 °C)',chart.color],['IJsdag (TX < 0 °C)',chart.otherColor]]){
+        const labels=chart.labels||['Vorst (TN < 0 °C)','IJsdag (TX < 0 °C)'];
+        for(const [label,color] of [[labels[0],chart.color],[labels[1],chart.otherColor]]){
           const item=document.createElement('span');item.style.cssText='display:inline-flex;align-items:center;gap:5px';
           const swatch=document.createElement('span');swatch.style.cssText='display:inline-block;width:11px;height:11px;border-radius:2px;background:'+color;
           item.appendChild(swatch);item.appendChild(document.createTextNode(label));legend.appendChild(item);
         }
         card.appendChild(legend);
+        if(chart.otherField==='snowDepth'){
+          // Show an unconditional P20-P80 snow-cover range only when the
+          // snow-depth ensembles provide real, non-negative observations.
+          const dated=dates.map(date=>{
+            const modelRanges=available.map(m=>{
+              const a=m.days[date]?.snowDepth||[];
+              return a.length>=5?[quantile(a,.2),quantile(a,.8)]:null;
+            }).filter(Boolean);
+            return modelRanges.length?{
+              date,lo:modelRanges.reduce((s,a)=>s+a[0],0)/modelRanges.length,
+              hi:modelRanges.reduce((s,a)=>s+a[1],0)/modelRanges.length
+            }:null;
+          }).filter(Boolean);
+          const peak=dated.reduce((best,d)=>!best||d.hi>best.hi?d:best,null);
+          if(peak&&peak.hi>=.5){
+            const detail=document.createElement('div');
+            detail.style.cssText='font-size:11px;color:#496c85;padding:2px 9px 5px';
+            detail.textContent='Sneeuwdek om 08:00 · grootste P20–P80-bandbreedte '+
+              short(peak.date)+': '+peak.lo.toFixed(1).replace('.',',')+'–'+
+              peak.hi.toFixed(1).replace('.',',')+' cm (regiosteekproef)';
+            card.appendChild(detail);
+          }
+          if(!dated.length){
+            const warning=document.createElement('div');
+            warning.style.cssText='font-size:11px;color:#687f93;padding:2px 9px 5px';
+            warning.textContent='Sneeuwdekgegevens niet beschikbaar; de blauwe sneeuwvalkans blijft zichtbaar.';
+            card.appendChild(warning);
+          }
+        }
       }
     }
     section.appendChild(card);
