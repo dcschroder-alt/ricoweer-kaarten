@@ -621,7 +621,7 @@ async def make_images() -> None:
             for(let j=0;j<sites.length;j++) {
               const src=sites[j].hourly[variable+'_'+suffix];
               const nums=samples[j].map(i=>src[i]).filter(Number.isFinite);
-              if(nums.length<12)continue;
+              if(nums.length<(type==='tx'?20:12))continue;
               const v=type==='tx'?Math.max(...nums):type==='tn'?Math.min(...nums):
                  nums.reduce((a,b)=>a+b,0);
               regional.push(v);
@@ -657,7 +657,7 @@ async def make_images() -> None:
   };
   // Only the documented three plots, based on actual members from 2–3 representative points.
   const charts=winter?[
-    {title:'❄️ Vorstkans',detail:'Minimum onder 0 °C',field:'tn',test:x=>x<0,kind:'chance',color:'#267acb'},
+    {title:'❄️ Vorst- en ijsdagkans',detail:'Vorst: minimum < 0 °C · IJsdag: maximum < 0 °C',field:'tn',test:x=>x<0,otherField:'tx',otherTest:x=>x<0,kind:'dual-chance',color:'#267acb',otherColor:'#174c93'},
     {title:'🌨️ Sneeuwkans',detail:'Minstens 0,1 cm sneeuwval',field:'snow',test:x=>x>=.1,kind:'chance',color:'#5897cb'},
     {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima · P20–P80 en mediaan',kind:'temp',color:'#c95746'}
   ]:[
@@ -686,8 +686,12 @@ async def make_images() -> None:
     const x=i=>38+i*46, top=20,bottom=135;
     let samples;
     if(chart.kind==='temp')samples=dates.map(txStats);
+    else if(chart.kind==='dual-chance')samples=dates.map(d=>({
+      frost:percentage(chart.field,chart.test,d),
+      ice:percentage(chart.otherField,chart.otherTest,d)
+    }));
     else samples=dates.map(d=>percentage(chart.field,chart.test,d));
-    if(samples.every(x=>x===null)){
+    if(samples.every(v=>chart.kind==='dual-chance'?(v.frost===null&&v.ice===null):v===null)){
       const no=document.createElement('div');no.textContent='Geen bruikbare ensemblegegevens voor deze grafiek';
       no.style.cssText='color:#687f93;font-size:12px;padding:25px 10px';card.appendChild(no);
     }else{
@@ -703,7 +707,16 @@ async def make_images() -> None:
         svg.appendChild(make('text',{x:32,y:yy+4,'font-size':10,'text-anchor':'end',fill:'#647d91'},
           chart.kind==='temp'?Math.round(v)+'°':Math.round(v)+'%'));
       }
-      if(chart.kind==='chance'){
+      if(chart.kind==='dual-chance'){
+        samples.forEach((v,i)=>{
+          if(Number.isFinite(v.frost))svg.appendChild(make('rect',{
+            x:x(i)-17,y:y(v.frost),width:15,height:Math.max(0,bottom-y(v.frost)),
+            rx:2,fill:chart.color}));
+          if(Number.isFinite(v.ice))svg.appendChild(make('rect',{
+            x:x(i)+2,y:y(v.ice),width:15,height:Math.max(0,bottom-y(v.ice)),
+            rx:2,fill:chart.otherColor}));
+        });
+      }else if(chart.kind==='chance'){
         samples.forEach((v,i)=>{if(v===null)return;
           svg.appendChild(make('rect',{x:x(i)-11,y:y(v),width:22,height:Math.max(0,bottom-y(v)),rx:3,fill:chart.color}));
         });
@@ -724,6 +737,16 @@ async def make_images() -> None:
       dates.forEach((d,i)=>svg.appendChild(make('text',{x:x(i),y:157,'font-size':9,
         'text-anchor':'middle',fill:'#486479'},short(d))));
       card.appendChild(svg);
+      if(chart.kind==='dual-chance'){
+        const legend=document.createElement('div');
+        legend.style.cssText='display:flex;flex-wrap:wrap;gap:12px;padding:2px 9px 5px;font-size:11px;color:#34536d';
+        for(const [label,color] of [['Vorst (TN < 0 °C)',chart.color],['IJsdag (TX < 0 °C)',chart.otherColor]]){
+          const item=document.createElement('span');item.style.cssText='display:inline-flex;align-items:center;gap:5px';
+          const swatch=document.createElement('span');swatch.style.cssText='display:inline-block;width:11px;height:11px;border-radius:2px;background:'+color;
+          item.appendChild(swatch);item.appendChild(document.createTextNode(label));legend.appendChild(item);
+        }
+        card.appendChild(legend);
+      }
     }
     section.appendChild(card);
   }
