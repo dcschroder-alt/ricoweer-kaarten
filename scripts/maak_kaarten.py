@@ -360,33 +360,23 @@ async def make_images() -> None:
   const veryWet=r=>wetScore(r)>=2;
   const brighter=r=>hasSun(r)?r.sun>=3:['zon','zonwolken'].includes(kind(r));
   const sunny=r=>hasSun(r)?r.sun>=5:kind(r)==='zon';
-  const tempRange=arr=>{const v=arr.map(r=>round(r.max));const lo=Math.min(...v),hi=Math.max(...v);return lo===hi?`${lo} graden`:hi-lo===1?`${lo} of ${hi} graden`:`${lo} tot ${hi} graden`;};
+  const tempRange=arr=>{const v=arr.map(r=>round(r.max));const lo=Math.min(...v),hi=Math.max(...v);return lo===hi?`${lo} graden`:hi-lo===1?`${lo} of ${hi} graden`:`tussen ${lo} en ${hi} graden`;};
   const today=rows[0],tomorrow=rows[1];
   const clause=r=>{
-    if(veryWet(r))return 'valt geregeld regen';
+    if(veryWet(r))return 'staat geregeld regen op het programma';
     if(kind(r)==='onweer')return 'komen buien voor, mogelijk met onweer';
-    if(kind(r)==='sneeuw')return 'kan sneeuw vallen';
-    if(wetScore(r)===1)return sunny(r)?'zijn er zonnige perioden en enkele buien':'komen enkele buien voor';
-    if(sunny(r))return 'schijnt de zon flink';
-    if(brighter(r))return 'zijn er perioden met zon';
-    if(kind(r)==='bewolkt')return 'overheerst de bewolking';
-    return 'is het overwegend droog';
+    if(kind(r)==='sneeuw')return 'is er kans op sneeuw';
+    if(wetScore(r)===1)return sunny(r)?'wisselen zonnige perioden en enkele buien elkaar af':'trekken enkele buien over de regio';
+    if(sunny(r))return 'krijgt de zon volop ruimte';
+    if(brighter(r))return 'is er regelmatig ruimte voor de zon';
+    if(kind(r)==='bewolkt')return 'heeft de bewolking de overhand';
+    return 'blijft het op de meeste plaatsen droog';
   };
+  const dayText=r=>`${cap(day(r))} ${clause(r)}.`;
   const delta=round(tomorrow.max)-round(today.max);
-  const tempTomorrow=()=>{
-    const x=round(tomorrow.max);
-    if(delta===0)return `opnieuw ${x} graden`;
-    if(delta>0)return delta<=2?`met ${x} graden iets zachter`:`met ${x} graden duidelijk zachter`;
-    if(x<=6)return `${x} graden, ${delta<=-3?'duidelijk':'wat'} kouder dan ${day(today)}`;
-    return `${x} graden, ${delta<=-3?'duidelijk':'wat'} kouder dan ${day(today)}`;
-  };
-  const todayText=`${cap(day(today))} ${clause(today)} en wordt het ${round(today.max)} graden.`;
-  const tomorrowDay=cap(day(tomorrow));
-  const tomorrowText=(veryWet(today)&&veryWet(tomorrow))?`${tomorrowDay} blijft het nat`:
-    (wetScore(today)===wetScore(tomorrow)&&kind(today)===kind(tomorrow))?`${tomorrowDay} ${clause(tomorrow)}`:
-    (wetScore(tomorrow)<wetScore(today))?`${tomorrowDay} wordt het droger en ${clause(tomorrow)}`:
-    `${tomorrowDay} ${clause(tomorrow)}`;
-  const p1=`${todayText} ${tomorrowText} en wordt het ${tempTomorrow()}.`;
+  const tempChange=delta<=-3?'Dat is duidelijk kouder.':delta<=-1?'Daarmee wordt het iets kouder.':
+     delta>=3?'Dat is duidelijk zachter.':delta>=1?'Daarmee wordt het iets zachter.':'';
+  const p1=`${dayText(today)} Het wordt ${round(today.max)} graden. ${dayText(tomorrow)} De temperatuur komt uit op ${round(tomorrow.max)} graden.${tempChange?' '+tempChange:''}`;
   // Perioden vormen op basis van samenhangende dagwaarden, niet losse trefwoorden.
   // Dag 3-5: eerst aanhoudend nat benoemen, daarna het omslagmoment.
   const mid=rows.slice(2,5),later=rows.slice(5);
@@ -409,11 +399,11 @@ async def make_images() -> None:
   }else if(mid.filter(veryWet).length>=2){
     p2=`Ook ${day(mid[0])} en de dagen daarna valt geregeld regen.`;
   }else if(mid.filter(r=>wetScore(r)<=1&&brighter(r)).length>=2){
-    p2=`Vanaf ${day(mid[0])} zijn er vaker droge perioden met zon.`;
+    p2=`Vanaf ${day(mid[0])} krijgt de zon vaker ruimte en blijft het meestal droog.`;
   }else if(mid.some(veryWet)){
     p2=`${cap(day(mid.find(veryWet)))} valt geregeld regen; op de andere dagen zijn er ook droge perioden.`;
   }else{
-    p2=`Vanaf ${day(mid[0])} zijn er geregeld droge perioden${mid.some(brighter)?' met af en toe zon':''}.`;
+    p2=`Vanaf ${day(mid[0])} ${mid.some(brighter)?'wisselen wolkenvelden en zonnige momenten elkaar af':'houdt de bewolking vaak de overhand'}.`;
   }
   const firstAvg=rows.slice(0,5).reduce((n,r)=>n+r.max,0)/5;
   const laterAvg=later.reduce((n,r)=>n+r.max,0)/5;
@@ -421,33 +411,25 @@ async def make_images() -> None:
   const wetLater=later.filter(veryWet).length;
   const showerLater=later.filter(r=>wetScore(r)===1).length;
   const sunLater=later.filter(brighter).length;
-  const weatherLater=wetLater>=3?'Verder vooruit blijft het wisselvallig met regelmatig regen.':
-    showerLater+wetLater>=3?'Verder vooruit wisselen droge perioden en enkele buien elkaar af.':
-    sunLater>=3?'Verder vooruit zijn er geregeld droge perioden met zon.':'Verder vooruit zijn er overwegend droge perioden.';
+  const weatherLater=wetLater>=3?'In de tweede helft van de periode blijft regen regelmatig terugkeren.':
+    showerLater+wetLater>=3?'Later in de week krijgen buien en droge momenten allebei ruimte.':
+    sunLater>=3?'Ook verder vooruit zijn er regelmatig zonnige perioden.':'De tweede helft van de periode verloopt grotendeels droog.';
   const range=tempRange(later);
   const laterTemps=later.map(r=>round(r.max));
   const laterLo=Math.min(...laterTemps),laterHi=Math.max(...laterTemps);
   const steadyRange=laterLo===laterHi?`rond ${laterLo} graden`:
     laterHi-laterLo===1?`op ${laterLo} of ${laterHi} graden`:
     `tussen ${laterLo} en ${laterHi} graden`;
-  const tempLater=tempDiff<=-3?`Het wordt kouder, met maxima van ${range}.`:
-    tempDiff>=3?`Het wordt zachter, met maxima van ${range}.`:`De maxima liggen dan ${steadyRange}.`;
+  const tempLater=tempDiff<=-3?`De kou wint terrein: de maxima liggen ${range.startsWith('tussen ')?range:'rond '+range}.`:
+    tempDiff>=3?`Later loopt de temperatuur wat op, met maxima ${range.startsWith('tussen ')?range:'van '+range}.`:`De maxima liggen dan ${steadyRange}.`;
   let p3=`${weatherLater} ${tempLater}`;
   const lows=rows.slice(2).filter(r=>Number.isFinite(r.min));
   const min=lows.length?Math.min(...lows.map(r=>r.min)):null;
   if(min!==null&&min<=0)p3+=' In de koudste nachten kan het plaatselijk rond het vriespunt komen.';
   else if(min!==null&&min<=2)p3+=` In de koudste nachten daalt de temperatuur tot ongeveer ${round(min)} ${round(min)===1?'graad':'graden'}.`;
-  // Onderste samenvatting voegt iets toe en herhaalt niet de volledige hoofdtekst.
-  const summary=el.querySelector('.rico5DaySummary');
-  if(summary){
-    const sunniest=rows.reduce((best,r)=>hasSun(r)&&(!best||r.sun>best.sun)?r:best,null);
-    const wettest=rows.reduce((best,r)=>hasRain(r)&&(!best||r.rain>best.rain)?r:best,null);
-    let note='';
-    if(sunniest&&sunniest.sun>=5)note=`De meeste zon wordt ${day(sunniest)} verwacht (${round(sunniest.sun)} uur).`;
-    else if(wettest&&wettest.rain>=8)note=`Vooral ${day(wettest)} kan veel regen vallen.`;
-    else note='De verwachting voor dag 6–10 is nog onzeker.';
-    summary.textContent=note;
-  }
+  // De overbodige zonnigste/natste-dagregels maken plaats voor drie Randstadpluimen.
+  el.querySelector('.rico5DaySummary')?.remove();
+  el.querySelector('.rico5DayHighlights')?.remove();
   for(const node of el.querySelectorAll('div,p,small,span')){
     if(node.children.length===0&&/Regionale dagmodelmix|Dag- en uurwaarden blijven gescheiden/i.test(node.textContent||'')){
       const scan=el.dataset.scanSavedAt;
@@ -465,7 +447,12 @@ async def make_images() -> None:
   if(wordCount<35||wordCount>145)throw Error('Tekstcontrole: lengte '+wordCount);
   const box=document.createElement('section');box.id='ricoExportRandstadNarrative';box.setAttribute('aria-label','Automatisch weerbericht Randstad');
   box.style.cssText='box-sizing:border-box;margin:9px 8px 12px;padding:14px 15px;background:#e6f2fa;border:1px solid #bfdbe9;border-radius:12px;color:#17445f;font:15px/1.52 Arial,sans-serif;overflow-wrap:break-word;';
-  const heading=document.createElement('div');heading.textContent='Weerbericht Randstad';heading.style.cssText='font-size:19px;line-height:1.25;font-weight:800;margin-bottom:9px;color:#07527a';box.appendChild(heading);
+  const headline=veryWet(today)&&veryWet(tomorrow)?(mid.some(brighter)||later.some(brighter)?'Nat begin, later meer ruimte voor de zon':'Regen zet de toon in de Randstad'):
+    sunny(today)&&sunny(tomorrow)?'De zon laat zich volop zien':
+    tempDiff<=-3?'De kou krijgt steeds meer vat op de Randstad':
+    tempDiff>=3?'Later in de periode zachter':
+    mid.filter(r=>wetScore(r)<=1&&brighter(r)).length>=2?'Meer zon en vaak droog':'Wolken, zon en af en toe een bui';
+  const heading=document.createElement('div');heading.textContent=headline;heading.style.cssText='font-size:19px;line-height:1.25;font-weight:800;margin-bottom:9px;color:#07527a';box.appendChild(heading);
   for(const str of texts){const p=document.createElement('p');p.textContent=str;p.style.cssText='margin:0 0 9px';box.appendChild(p);}
   box.lastElementChild.style.marginBottom='0';
   const firstRow=el.querySelector('.rico5DayRow');firstRow.parentNode.insertBefore(box,firstRow);
@@ -538,6 +525,182 @@ async def make_images() -> None:
               const note=document.createElement('div');note.textContent='Indicatieve weektrend, geen dagverwachting.';note.style.cssText='font-size:11px;opacity:.8;margin-top:7px';box.appendChild(note);
               el.appendChild(box);return {lines,note:note.textContent};
             }""",ec46)
+            # Optionele, werkelijk regionale ECMWF/GEFS-pluimen. Bronstoring mag
+            # de dagverwachting of de succesvolle kaartenexport nooit blokkeren.
+            plume_image_url = None
+            try:
+                plume_info = await forecast.evaluate(r"""async (root) => {
+  const rows = [...root.querySelectorAll('.rico5DayRow')];
+  const dates = rows.map(r => r.dataset.date);
+  const winter = [10,11,12,1,2,3].includes(Number(dates[0]?.slice(5,7)));
+  // Three representatives for existing Randstad subregions, not a claim of full areal coverage.
+  const places = [
+    {name:'Randstad-kust',lat:51.98,lon:4.13},
+    {name:'Randstad-west',lat:52.02,lon:4.71},
+    {name:'Utrecht/Flevoland',lat:52.10,lon:5.18}
+  ];
+  const models = ['ecmwf_ifs025_ensemble','ncep_gefs025'];
+  const vars = ['temperature_2m','precipitation','snowfall'];
+  const fetchModel = async model => {
+    const q = new URLSearchParams({
+      latitude:places.map(p=>p.lat).join(','),longitude:places.map(p=>p.lon).join(','),
+      hourly:vars.join(','),models:model,timezone:'Europe/Amsterdam',
+      forecast_days:'12',precipitation_unit:'mm'
+    });
+    const ctl = new AbortController();
+    const timer = setTimeout(()=>ctl.abort(),10000);
+    try {
+      const response=await fetch('https://ensemble-api.open-meteo.com/v1/ensemble?'+q.toString(),
+        {signal:ctl.signal,cache:'no-store'});
+      if(!response.ok)throw new Error('HTTP '+response.status);
+      const body=await response.json();
+      const sites=Array.isArray(body)?body:[body];
+      if(sites.length!==places.length)throw new Error('onvolledige regionale respons');
+      const keys=Object.keys(sites[0]?.hourly||{});
+      const memberSuffixes=keys.filter(k=>/^temperature_2m_member\d+$/.test(k))
+         .map(k=>k.slice('temperature_2m_'.length));
+      if(memberSuffixes.length<5)throw new Error('onvoldoende ensembleleden');
+      const members={};
+      for(const variable of vars) {
+        members[variable]=memberSuffixes.filter(s=>sites.every(site=>
+          Array.isArray(site.hourly?.[variable+'_'+s])));
+      }
+      const data={model,days:{}};
+      for(const date of dates){
+        data.days[date]={};
+        const samples=sites.map(site=>(site.hourly.time||[])
+          .map((t,i)=>String(t).slice(0,10)===date?i:-1).filter(i=>i>=0));
+        for(const [variable,type] of [['temperature_2m','tx'],['temperature_2m','tn'],
+                     ['precipitation','rain'],['snowfall','snow']]){
+          const values=[];
+          for(const suffix of members[variable]){
+            const regional=[];
+            for(let j=0;j<sites.length;j++) {
+              const src=sites[j].hourly[variable+'_'+suffix];
+              const nums=samples[j].map(i=>src[i]).filter(Number.isFinite);
+              if(nums.length<12)continue;
+              const v=type==='tx'?Math.max(...nums):type==='tn'?Math.min(...nums):
+                 nums.reduce((a,b)=>a+b,0);
+              regional.push(v);
+            }
+            if(regional.length<2)continue;
+            regional.sort((a,b)=>a-b);
+            values.push(regional[Math.floor(regional.length/2)]);
+          }
+          data.days[date][type]=values;
+        }
+      }
+      return data;
+    }finally{clearTimeout(timer)}
+  };
+  const results=await Promise.all(models.map(async m=>{
+    try{return await fetchModel(m)}catch(err){console.warn('Randstad pluimbron niet bereikbaar',m,String(err));return null}
+  }));
+  const available=results.filter(Boolean);
+  const percentage=(variable,condition,date)=>{
+    const probs=available.map(m=>{
+      const arr=m.days[date]?.[variable]||[];
+      return arr.length>=5?100*arr.filter(condition).length/arr.length:null;
+    }).filter(Number.isFinite);
+    return probs.length?probs.reduce((a,b)=>a+b,0)/probs.length:null;
+  };
+  const quantile=(a,q)=>{if(!a.length)return null;const b=[...a].sort((x,y)=>x-y),i=(b.length-1)*q,l=Math.floor(i);return b[l]+(b[Math.min(l+1,b.length-1)]-b[l])*(i-l)};
+  const txStats=date=>{
+    const stats=available.map(m=>{
+      const arr=m.days[date]?.tx||[];
+      return arr.length>=5?[quantile(arr,.2),quantile(arr,.5),quantile(arr,.8)]:null;
+    }).filter(Boolean);
+    return stats.length?stats[0].map((_,i)=>stats.reduce((s,a)=>s+a[i],0)/stats.length):null;
+  };
+  // Only the documented three plots, based on actual members from 2–3 representative points.
+  const charts=winter?[
+    {title:'❄️ Vorstkans',detail:'Minimum onder 0 °C',field:'tn',test:x=>x<0,kind:'chance',color:'#267acb'},
+    {title:'🌨️ Sneeuwkans',detail:'Minstens 0,1 cm sneeuwval',field:'snow',test:x=>x>=.1,kind:'chance',color:'#5897cb'},
+    {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima · P20–P80 en mediaan',kind:'temp',color:'#c95746'}
+  ]:[
+    {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima · P20–P80 en mediaan',kind:'temp',color:'#c95746'},
+    {title:'🌧️ Neerslagkans',detail:'Minstens 1 mm in 24 uur',field:'rain',test:x=>x>=1,kind:'chance',color:'#267acb'},
+    {title:'☀️ Warmtekans',detail:'Dagmaximum ≥ 20 °C',field:'tx',test:x=>x>=20,kind:'chance',color:'#ef943d'}
+  ];
+  const ns='http://www.w3.org/2000/svg';
+  const make=(name,attrs={},txt)=>{const node=document.createElementNS(ns,name);for(const [k,v] of Object.entries(attrs))node.setAttribute(k,String(v));if(txt!==undefined)node.textContent=txt;return node};
+  const section=document.createElement('section'); section.id='ricoExportRandstadPlumes';
+  section.style.cssText='box-sizing:border-box;margin:12px 8px;padding:12px;background:#eff7fd;border:1px solid #bcd9ed;border-radius:12px;font:13px/1.45 Arial,sans-serif;color:#173f5b';
+  const heading=document.createElement('div');heading.textContent='📈 Randstad · pluimen en kansen (10 dagen)';
+  heading.style.cssText='font-weight:800;font-size:18px;margin:0 0 4px';section.appendChild(heading);
+  const note=document.createElement('div');
+  note.textContent=available.length?'ECMWF ENS'+(available.some(m=>m.model.includes('gefs'))?' + GFS GEFS':'')+
+    ' · regionale mediaan van representatieve punten · actuele ensembleleden':
+    'Ensemblegegevens tijdelijk niet beschikbaar; geen kansen ingevuld.';
+  note.style.cssText='font-size:11px;color:#536f83;margin-bottom:10px';section.appendChild(note);
+  const short=date=>new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric',timeZone:'UTC'})
+    .format(new Date(date+'T12:00:00Z')).replace('.','');
+  for(const chart of charts){
+    const card=document.createElement('div');card.style.cssText='background:#fff;border:1px solid #d7e7f2;border-radius:10px;padding:10px 6px;margin:0 0 10px';
+    const title=document.createElement('div');title.textContent=chart.title;title.style.cssText='font-weight:800;font-size:14px;margin:0 8px 2px';card.appendChild(title);
+    const detail=document.createElement('div');detail.textContent=chart.detail;detail.style.cssText='font-size:11px;margin:0 8px 7px;color:#637b8d';card.appendChild(detail);
+    const svg=make('svg',{viewBox:'0 0 480 172',width:'100%',height:'auto',role:'img','aria-label':chart.title});
+    const x=i=>38+i*46, top=20,bottom=135;
+    let samples;
+    if(chart.kind==='temp')samples=dates.map(txStats);
+    else samples=dates.map(d=>percentage(chart.field,chart.test,d));
+    if(samples.every(x=>x===null)){
+      const no=document.createElement('div');no.textContent='Geen bruikbare ensemblegegevens voor deze grafiek';
+      no.style.cssText='color:#687f93;font-size:12px;padding:25px 10px';card.appendChild(no);
+    }else{
+      let low=0,high=100;
+      if(chart.kind==='temp'){
+        const a=samples.filter(Boolean).flat();low=Math.floor(Math.min(...a)-2);high=Math.ceil(Math.max(...a)+2);
+        if(high-low<6)high=low+6;
+      }
+      const y=v=>bottom-(v-low)/(high-low)*(bottom-top);
+      for(let i=0;i<=4;i++){
+        const v=low+(high-low)*i/4,yy=y(v);
+        svg.appendChild(make('line',{x1:38,y1:yy,x2:456,y2:yy,stroke:'#dce8f0','stroke-width':1}));
+        svg.appendChild(make('text',{x:32,y:yy+4,'font-size':10,'text-anchor':'end',fill:'#647d91'},
+          chart.kind==='temp'?Math.round(v)+'°':Math.round(v)+'%'));
+      }
+      if(chart.kind==='chance'){
+        samples.forEach((v,i)=>{if(v===null)return;
+          svg.appendChild(make('rect',{x:x(i)-11,y:y(v),width:22,height:Math.max(0,bottom-y(v)),rx:3,fill:chart.color}));
+        });
+      }else{
+        const valid=samples.map((v,i)=>({i,v})).filter(o=>o.v);
+        // Separate segments to avoid inventing values on missing dates.
+        let segment=[];const segments=[];
+        for(const o of samples.map((v,i)=>({i,v}))){if(o.v)segment.push(o);else if(segment.length){segments.push(segment);segment=[]}}
+        if(segment.length)segments.push(segment);
+        for(const group of segments){
+          const poly=group.map(o=>`${x(o.i)},${y(o.v[2])}`).join(' ')+ ' '+
+            [...group].reverse().map(o=>`${x(o.i)},${y(o.v[0])}`).join(' ');
+          svg.appendChild(make('polygon',{points:poly,fill:'#aed9f1','fill-opacity':'.75'}));
+          svg.appendChild(make('polyline',{points:group.map(o=>`${x(o.i)},${y(o.v[1])}`).join(' '),
+            fill:'none',stroke:chart.color,'stroke-width':3,'stroke-linecap':'round','stroke-linejoin':'round'}));
+        }
+      }
+      dates.forEach((d,i)=>svg.appendChild(make('text',{x:x(i),y:157,'font-size':9,
+        'text-anchor':'middle',fill:'#486479'},short(d))));
+      card.appendChild(svg);
+    }
+    section.appendChild(card);
+  }
+  const source=document.createElement('div');
+  source.textContent='Modelkansen = aandeel ensembleleden, per bron en regio samengevat; geen gekalibreerde kans. Regionale steekproef: kust, west en Utrecht/Flevoland. Ontbrekende modelwaarden tellen niet mee.';
+  source.style.cssText='font-size:10px;color:#5b7587';section.appendChild(source);
+  const risks=root.querySelector('.ricoRiskBox');
+  if(risks)risks.insertAdjacentElement('afterend',section);
+  else root.appendChild(section);
+  return {available:available.map(m=>m.model),plots:charts.map(c=>c.title),dateCount:dates.length};
+}
+""")
+                print('Randstad-pluimen:', json.dumps(plume_info,ensure_ascii=False),flush=True)
+                plume_card=forecast.locator('#ricoExportRandstadPlumes')
+                plume_png=await plume_card.screenshot(type='png',animations='disabled',timeout=20000)
+                if len(plume_png)>10000:
+                    plume_image_url='data:image/png;base64,'+base64.b64encode(plume_png).decode('ascii')
+            except Exception as exc:
+                print('Randstad-pluimen tijdelijk niet beschikbaar, bestaande 10-daagse blijft publiceerbaar:',str(exc),flush=True)
+
             print('Randstad-weerbericht:',json.dumps(narrative,ensure_ascii=False),flush=True)
             if narrative['words'] < 25 or narrative['words'] > 145:
                 raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
@@ -582,7 +745,7 @@ async def make_images() -> None:
             # Plaats hetzelfde weerbericht ook BOVEN de volledige Randstad-PNG.
             # Zo toont de bestaande WordPress-URL randstad-10dagen.png de tekst.
             # Compositie gebeurt lokaal in de browser; geen extra weer-API-calls.
-            combined_url = await widget_page.evaluate(r"""async ({imageUrl, text}) => {
+            combined_url = await widget_page.evaluate(r"""async ({imageUrl, text, plumeImageUrl}) => {
               const image = new Image();
               image.src = imageUrl;
               await image.decode();
@@ -611,6 +774,8 @@ async def make_images() -> None:
                 return result;
               }
               const lines=ptexts.map(wrap);
+               let plume=null;
+               if(plumeImageUrl){try{plume=new Image();plume.src=plumeImageUrl;await plume.decode()}catch(e){plume=null}}
               if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 2–6'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
               // Het risicoblok en de dagelijkse modelzekerheid horen ook bij
               // de volledige WordPress-PNG, niet alleen de compacte variant.
@@ -641,7 +806,8 @@ async def make_images() -> None:
               }
               const headingHeight=Math.round(58*scale);
               const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
-              const topHeight=pad+headingHeight+textHeight+pad;
+              const chartHeight=plume?Math.round(inner*plume.naturalHeight/plume.naturalWidth):0;
+               const topHeight=pad+headingHeight+textHeight+pad+(chartHeight?chartHeight+pad:0);
               canvas.width=width;canvas.height=topHeight+image.naturalHeight;
               ctx.fillStyle='#eaf4fa';ctx.fillRect(0,0,width,topHeight);
               ctx.fillStyle='#07527a';ctx.font=`bold ${Math.round(34*scale)}px Arial`;
@@ -652,9 +818,10 @@ async def make_images() -> None:
                 for(const line of group){ctx.fillText(line,pad,y);y+=lineHeight;}
                 y+=Math.round(19*scale);
               }
+              if(plume)ctx.drawImage(plume,pad,pad+headingHeight+textHeight,inner,chartHeight);
               ctx.drawImage(image,0,topHeight);
               return canvas.toDataURL('image/png');
-            }""", {'imageUrl':big['dataUrl'],'text':narrative['text']})
+            }""", {'imageUrl':big['dataUrl'],'text':narrative['text'],'plumeImageUrl':plume_image_url})
             if not combined_url.startswith('data:image/png;base64,'):
                 raise RuntimeError('Volledige Randstad-PNG met weerbericht is ongeldig.')
             big_bytes = base64.b64decode(combined_url.split(',',1)[1], validate=True)
