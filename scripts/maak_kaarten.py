@@ -545,29 +545,86 @@ async def make_images() -> None:
               }catch(e){result.error=String(e?.message||e)}
               return result;
             }""")
+            # Presentatie uitsluitend in de WordPress-export: geen aanpassing aan
+            # bronwidget, regionale dagmix of modelvalidatie.
+            presentation = await forecast.evaluate(r"""el => {
+              // Verwijder de lange tussenzin dag 6–10 uit de compacte PNG.
+              el.querySelectorAll('.rico5DayDivider').forEach(node => node.remove());
+              const css=document.createElement('style');
+              css.textContent=`
+                #ricoWidgetFacts .rico5DayFeels{display:block;color:#33617b;
+                  font-size:11px;font-weight:750;line-height:1.35;margin-top:2px}
+                #ricoWidgetFacts #ricoExportEC46{margin:14px 9px 10px!important;
+                  padding:14px!important;border-radius:14px!important;
+                  background:#f0f6ff!important;border:1px solid #cbdfee!important}
+                #ricoWidgetFacts .ricoEC46Week{display:grid;grid-template-columns:72px minmax(0,1fr);
+                  align-items:center;gap:9px;padding:9px 1px!important;
+                  border-bottom:1px solid #d8e6f4!important;color:#204b68}
+                #ricoWidgetFacts .ricoEC46Week:nth-of-type(even){background:#e8f1fc88}
+                #ricoWidgetFacts .ricoEC46Badge{display:inline-block;padding:5px 6px;
+                  border-radius:8px;background:#d8eafb;color:#075277;font-weight:850;text-align:center}
+                #ricoWidgetFacts .ricoEC46Main{display:block;font-size:13px;font-weight:750}
+                #ricoWidgetFacts .ricoEC46Signal{display:block;font-size:11px;
+                  color:#536d80;margin-top:3px}
+              `;
+              el.appendChild(css);
+              // Canadese windchillformule: T in graden Celsius, wind in km/u.
+              // Regionale dagmaximum- en dagwindwaarden zijn indicatief; geen uurmix.
+              const windBft=kmh=>kmh<1?0:kmh<6?1:kmh<12?2:kmh<20?3:
+                kmh<29?4:kmh<39?5:kmh<50?6:kmh<62?7:kmh<75?8:kmh<89?9:
+                kmh<103?10:kmh<118?11:12;
+              let count=0;
+              for(const row of el.querySelectorAll('.rico5DayRow')){
+                const t=Number(row.dataset.max),v=Number(row.dataset.wind);
+                if(!Number.isFinite(t)||!Number.isFinite(v)||t>=5||windBft(v)<3)continue;
+                const chill=13.12+0.6215*t-11.37*Math.pow(v,.16)+0.3965*t*Math.pow(v,.16);
+                if(!Number.isFinite(chill))continue;
+                const target=row.querySelector('.rico5DayDescription');
+                if(!target)continue;
+                const line=document.createElement('small');
+                line.className='rico5DayFeels';
+                line.textContent='🌬️ Gevoel overdag ca. '+Math.round(chill)+'° (windchill)';
+                target.appendChild(line);count++;
+              }
+              return {feelsDays:count,dividerRemoved:true};
+            }""")
+            print('WordPress dagpresentatie:',presentation,flush=True)
             print('EC46 diagnose:',json.dumps(ec46,ensure_ascii=False),flush=True)
             ec46_display = await forecast.evaluate(r"""(el,pack) => {
               const box=document.createElement('section');box.id='ricoExportEC46';
-              box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:12px 15px;background:#f3f7ff;border:1px solid #c9d8ec;border-radius:12px;color:#17445f;font:14px/1.5 Arial,sans-serif';
-              const h=document.createElement('div');h.textContent='EC46 · vooruitblik week 2–6';h.style.cssText='font-weight:800;font-size:17px;margin-bottom:7px';box.appendChild(h);
+              box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:14px;background:#f0f6ff;border:1px solid #c9d8ec;border-radius:14px;color:#17445f;font:14px/1.45 Arial,sans-serif';
+              const h=document.createElement('div');h.textContent='📅 EC46 · vooruitblik week 2–6';
+              h.style.cssText='font-weight:850;font-size:18px;margin-bottom:9px;color:#075277';box.appendChild(h);
               const lines=[];
+              const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
               if(pack.weeks?.length){
                 for(const w of pack.weeks){
-                  const temp=w.anomaly>=.4?'warmer':w.anomaly<=-.4?'kouder':'rond normaal';
-                  const delta=Number.isFinite(w.anomaly)?(w.anomaly>0?'+':'')+w.anomaly.toFixed(1).replace('.',',')+' °C':null;
+                  const delta=Number.isFinite(w.anomaly)?w.anomaly:null;
                   const hasMax=Number.isFinite(w.txMin)&&Number.isFinite(w.txMax);
-                  const actual=hasMax
-                    ?`maxima ${Math.floor(Math.min(w.txMin,w.txMax))} tot ${Math.ceil(Math.max(w.txMin,w.txMax))} °C`
-                    :delta?`${temp} (${delta} t.o.v. normaal; maxima niet beschikbaar)`:'Maxima en temperatuurafwijking niet beschikbaar';
+                  const low=hasMax?Math.floor(Math.min(w.txMin,w.txMax)):null;
+                  const high=hasMax?Math.ceil(Math.max(w.txMin,w.txMax)):null;
+                  const actual=hasMax?`maxima ${low} tot ${high} °C`:'maxima niet beschikbaar';
+                  const trend=delta===null?'':delta>=.4?' · warmer dan normaal':delta<=-.4?' · kouder dan normaal':'';
                   const rain=w.wet===null?'':w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
-                  const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
-                  lines.push(`Week ${w.week} · ${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain}`);
+                  const line=`Week ${w.week} · ${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain}`;
+                  lines.push(line);
+                  const row=document.createElement('div');row.className='ricoEC46Week';
+                  const badge=document.createElement('span');badge.className='ricoEC46Badge';badge.textContent='Week '+w.week;
+                  const right=document.createElement('span');
+                  const main=document.createElement('span');main.className='ricoEC46Main';main.textContent=`${fmt(w.start)}–${fmt(w.end)} · ${actual}`;
+                  const detail=document.createElement('span');detail.className='ricoEC46Signal';
+                  detail.textContent=[trend.replace(/^ · /,''),rain.replace(/^ · /,'')].filter(Boolean).join(' · ')||'Weekverwachting';
+                  right.append(main,detail);row.append(badge,right);box.appendChild(row);
                 }
-              }else lines.push('EC46-vooruitblik tijdelijk niet beschikbaar.');
-              for(const line of lines){const d=document.createElement('div');d.textContent=line;d.style.cssText='padding:5px 0;border-bottom:1px solid #dbe5f0';box.appendChild(d)}
-              const note=document.createElement('div');note.textContent='Indicatieve weektrend, geen dagverwachting.';note.style.cssText='font-size:11px;opacity:.8;margin-top:7px';box.appendChild(note);
+              }else{
+                lines.push('EC46-vooruitblik tijdelijk niet beschikbaar.');
+                const row=document.createElement('div');row.textContent=lines[0];row.style.cssText='padding:9px 0';box.appendChild(row);
+              }
+              const note=document.createElement('div');note.textContent='Indicatieve weektrend · geen dagverwachting.';
+              note.style.cssText='font-size:11px;color:#526b83;margin-top:9px';box.appendChild(note);
               el.appendChild(box);return {lines,note:note.textContent};
             }""",ec46)
+            print('EC46 opmaak:',json.dumps(ec46_display,ensure_ascii=False),flush=True)
             # Optionele, werkelijk regionale ECMWF/GEFS-pluimen. Bronstoring mag
             # de dagverwachting of de succesvolle kaartenexport nooit blokkeren.
             plume_image_url = None
@@ -937,7 +994,7 @@ async def make_images() -> None:
               const original = document.getElementById('ricoExportRandstadNarrative');
               const ptexts = [...(original?.querySelectorAll('p')||[])].map(p=>p.textContent);
               const ec46=document.getElementById('ricoExportEC46');
-              const ec46Lines=ec46?[...ec46.querySelectorAll('div')].map(x=>x.textContent):[];
+              const ec46Lines=ec46?[...ec46.querySelectorAll(':scope > div')].map(x=>x.textContent):[];
               if(ptexts.length!==3)throw new Error('Weerbericht ontbreekt bij PNG-compositie');
               ctx.font=`${Math.round(23*scale)}px Arial`;
               function wrap(str){
@@ -962,7 +1019,8 @@ async def make_images() -> None:
                  const range=node.querySelector('.rico5DayRange');
                  const windRange=node.querySelector('.rico5DayWindRange');
                  const reason=node.querySelector('.rico5DayReason');
-                 return c?`${node.dataset.date.slice(5)}: ${range?.textContent.trim()||''} · ${windRange?.textContent.trim()||''} · ${c.textContent.replace('🎯 ','').trim()}${reason?' · '+reason.textContent.trim():''}`:'';
+                 const feels=node.querySelector('.rico5DayFeels');
+                 return c?`${node.dataset.date.slice(5)}: ${range?.textContent.trim()||''} · ${windRange?.textContent.trim()||''} · ${c.textContent.replace('🎯 ','').trim()}${reason?' · '+reason.textContent.trim():''}${feels?' · '+feels.textContent.trim():''}`:'';
               }).filter(Boolean);
               if(confidence.length){
                 lines.push(wrap('Modelrange maxima, windrange en belangrijkste onzekerheid per beschikbare dag:'));
