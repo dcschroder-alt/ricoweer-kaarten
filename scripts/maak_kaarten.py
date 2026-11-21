@@ -701,6 +701,16 @@ async def make_images() -> None:
             except Exception as exc:
                 print('Randstad-pluimen tijdelijk niet beschikbaar, bestaande 10-daagse blijft publiceerbaar:',str(exc),flush=True)
 
+            # De Randstad-ensemblepluimen vervangen het oudere blok met losse
+            # modelondersteuningstegels. Dat scheelt duplicatie en nulpercentages.
+            # Verwijder uitsluitend het presentatiedeel in de exportbrowser;
+            # de modelscan, dagregels en data blijven ongewijzigd.
+            removed_risks = await forecast.evaluate("""el => {
+              let count=0;
+              for (const node of el.querySelectorAll('.ricoRiskBox')) {node.remove();count++}
+              return count;
+            }""")
+            print(f'Overbodig weerkansenblok uit WordPress-PNG verwijderd: {removed_risks}',flush=True)
             print('Randstad-weerbericht:',json.dumps(narrative,ensure_ascii=False),flush=True)
             if narrative['words'] < 25 or narrative['words'] > 145:
                 raise RuntimeError('Randstad-weerbericht buiten de afgesproken lengte.')
@@ -777,10 +787,9 @@ async def make_images() -> None:
                let plume=null;
                if(plumeImageUrl){try{plume=new Image();plume.src=plumeImageUrl;await plume.decode()}catch(e){plume=null}}
               if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 2–6'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
-              // Het risicoblok en de dagelijkse modelzekerheid horen ook bij
-              // de volledige WordPress-PNG, niet alleen de compacte variant.
-              const risks=[...document.querySelectorAll('#ricoWidgetFacts .ricoRiskItem')].map(node=>
-                 (node.innerText||'').replace(/\s*\n\s*/g,' · ').replace(/\s+/g,' ').trim());
+              // Dagelijkse modelzekerheid blijft beschikbaar in de PNG.
+              // De oude tekstuele weerkansen zijn bewust verwijderd; de
+              // ensemblepluimen zijn nu de visuele kansweergave.
               const confidence=[...document.querySelectorAll('#ricoWidgetFacts .rico5DayRow')].map(node=>{
                  const c=node.querySelector('.rico5DayConfidence');
                  const range=node.querySelector('.rico5DayRange');
@@ -788,21 +797,13 @@ async def make_images() -> None:
                  const reason=node.querySelector('.rico5DayReason');
                  return c?`${node.dataset.date.slice(5)}: ${range?.textContent.trim()||''} · ${windRange?.textContent.trim()||''} · ${c.textContent.replace('🎯 ','').trim()}${reason?' · '+reason.textContent.trim():''}`:'';
               }).filter(Boolean);
-              // Deze optionele toelichting mag de volledige PNG niet blokkeren.
-              // De actuele 10 dagrijen, modelscan en PNG zelf zijn hierboven al gevalideerd.
-              // Toon uitsluitend gegevens die daadwerkelijk op de pagina staan.
-              if(risks.length){
-                lines.push(wrap('Weerkansen · hoogste modelondersteuning in 10 dagen'));
-                for(const r of risks)lines.push(wrap(r));
-                lines.push(wrap('Modelondersteuning is geen gekalibreerde ensemblekans; ontbrekende gegevens zijn niet 0%.'));
-              }
               if(confidence.length){
                 lines.push(wrap('Modelrange maxima, windrange en belangrijkste onzekerheid per beschikbare dag:'));
                 for(let i=0;i<confidence.length;i+=2)lines.push(wrap(confidence.slice(i,i+2).join('  |  ')));
               }
-              if(risks.length!==6||confidence.length!==10){
-                console.warn('PNG: niet alle aanvullende kans-/zekerheidsregels aanwezig; bestaande dagverwachting behouden',
-                  {riskItems:risks.length,confidenceDays:confidence.length});
+              if(confidence.length!==10){
+                console.warn('PNG: niet alle dagelijkse zekerheidsregels aanwezig; bestaande dagverwachting behouden',
+                  {confidenceDays:confidence.length});
               }
               const headingHeight=Math.round(58*scale);
               const textHeight=lines.reduce((n,l)=>n+l.length*lineHeight+Math.round(19*scale),0);
