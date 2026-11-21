@@ -362,6 +362,14 @@ async def make_images() -> None:
   const sunny=r=>hasSun(r)?r.sun>=5:kind(r)==='zon';
   const tempRange=arr=>{const v=arr.map(r=>round(r.max));const lo=Math.min(...v),hi=Math.max(...v);return lo===hi?`${lo} graden`:hi-lo===1?`${lo} of ${hi} graden`:`tussen ${lo} en ${hi} graden`;};
   const today=rows[0],tomorrow=rows[1];
+  // Geen opgeklopte zekerheid: eerste dagen feitelijk, dag 6–10 voorzichtiger.
+  const early=rows.slice(0,5);
+  const earlyDry=early.filter(r=>wetScore(r)===0).length;
+  const earlyBright=early.filter(brighter).length;
+  const earlyMeanMax=early.reduce((s,r)=>s+r.max,0)/early.length;
+  const earlyCold=earlyMeanMax<=6;
+  const earlySunCold=earlyDry>=3&&earlyBright>=3&&earlyCold;
+
   const clause=r=>{
     if(veryWet(r))return 'staat geregeld regen op het programma';
     if(kind(r)==='onweer')return 'komen buien voor, mogelijk met onweer';
@@ -394,7 +402,7 @@ async def make_images() -> None:
     if(kind(r)==='buien' && Number.isFinite(r.rain) && r.rain>=.2)
       return sunny(r)?'Naast zonnige perioden is een bui mogelijk':'Verspreid trekken er enkele buien over';
     if(wetScore(r)===1)return 'Er komen enkele buien voor';
-    if(sunny(r))return sunny(previous)?'Ook dan laat de zon zich veel zien':'De zon krijgt dan ruim baan';
+    if(sunny(r))return sunny(previous)?'De zon blijft een hoofdrol spelen':'De zon krijgt dan ruim baan';
     if(brighter(r))return sunny(previous)?'De zon is wat minder vaak te zien':'Af en toe breekt de zon door';
     if(kind(r)==='bewolkt')return 'Wolkenvelden bepalen grotendeels het weerbeeld';
     return 'Het blijft overwegend droog';
@@ -430,7 +438,8 @@ async def make_images() -> None:
   }else if(mid.filter(veryWet).length>=2){
     p2=`Ook ${day(mid[0])} en de dagen daarna valt geregeld regen.`;
   }else if(mid.filter(r=>wetScore(r)<=1&&brighter(r)).length>=2){
-    p2=`Na het weekend houdt het overwegend droge weer aan${mid.every(sunny)?' en blijft het zonnig':', met af en toe zon'}.`;
+    p2=earlySunCold?'De eerste dagen verlopen veelal droog en zonnig, met voor november lage temperaturen.':
+      `De komende dagen blijft het vaak droog${mid.every(sunny)?' en overwegend zonnig':', met af en toe zon'}.`;
   }else if(mid.some(veryWet)){
     p2=`${cap(day(mid.find(veryWet)))} valt geregeld regen; op de andere dagen zijn er ook droge perioden.`;
   }else{
@@ -442,9 +451,10 @@ async def make_images() -> None:
   const wetLater=later.filter(veryWet).length;
   const showerLater=later.filter(r=>wetScore(r)===1).length;
   const sunLater=later.filter(brighter).length;
-  const weatherLater=wetLater>=3?'In de tweede helft van de periode blijft regen regelmatig terugkeren.':
-    showerLater+wetLater>=3?'Later in de week krijgen buien en droge momenten allebei ruimte.':
-    sunLater>=3?'Verder vooruit blijven zonnige perioden overheersen.':'De tweede helft van de periode verloopt grotendeels droog.';
+  const weatherLater=wetLater>=3?'Voor dag 6 tot en met 10 wijzen de modellen op regelmatig regen, maar de details zijn nog onzeker.':
+    showerLater+wetLater>=3?'Verder vooruit kunnen droge perioden en buien elkaar afwisselen; de precieze verdeling is onzeker.':
+    sunLater>=3?'Verder vooruit lijkt de zon geregeld te schijnen, al neemt de onzekerheid toe.':
+    'Verder vooruit lijkt het vaak droog te blijven, maar de onzekerheid neemt toe.';
   const range=tempRange(later);
   const laterTemps=later.map(r=>round(r.max));
   const laterLo=Math.min(...laterTemps),laterHi=Math.max(...laterTemps);
@@ -457,6 +467,7 @@ async def make_images() -> None:
     `Het wordt kouder, met maxima ${laterLo===laterHi?'rond '+laterLo+' graden':laterHi-laterLo===1?'van '+periodRange:periodRange}.`:
     tempDiff>=3?`De temperatuur loopt later wat op. De maxima liggen ${laterLo===laterHi?'rond '+laterLo+' graden':laterHi-laterLo===1?'op '+periodRange:periodRange}.`:
     `De maxima liggen dan ${steadyRange}.`;
+  // Een modelrange over verschillende dagen is geen exacte bandbreedte per dag.
   let p3=`${weatherLater} ${tempLater}`;
   const lows=rows.slice(2).filter(r=>Number.isFinite(r.min));
   const min=lows.length?Math.min(...lows.map(r=>r.min)):null;
@@ -490,11 +501,12 @@ async def make_images() -> None:
   if(wordCount<35||wordCount>145)throw Error('Tekstcontrole: lengte '+wordCount);
   const box=document.createElement('section');box.id='ricoExportRandstadNarrative';box.setAttribute('aria-label','Automatisch weerbericht Randstad');
   box.style.cssText='box-sizing:border-box;margin:9px 8px 12px;padding:14px 15px;background:#e6f2fa;border:1px solid #bfdbe9;border-radius:12px;color:#17445f;font:15px/1.52 Arial,sans-serif;overflow-wrap:break-word;';
-  const headline=veryWet(today)&&veryWet(tomorrow)?(mid.some(brighter)||later.some(brighter)?'Nat begin, later meer ruimte voor de zon':'Regen zet de toon in de Randstad'):
-    sunny(today)&&sunny(tomorrow)?'De zon laat zich volop zien':
-    tempDiff<=-3?'De kou krijgt steeds meer vat op de Randstad':
-    tempDiff>=3?'Later in de periode zachter':
-    mid.filter(r=>wetScore(r)<=1&&brighter(r)).length>=2?'Meer zon en vaak droog':'Wolken, zon en af en toe een bui';
+  const headline=earlySunCold?'Eerst zonnig en koud novemberweer, later onzekerder':
+    veryWet(today)&&veryWet(tomorrow)?(mid.some(brighter)||later.some(brighter)?'Nat begin, later meer ruimte voor de zon':'Regen zet de toon in de Randstad'):
+    sunny(today)&&sunny(tomorrow)?'Eerst zonnig, later neemt de onzekerheid toe':
+    tempDiff<=-3?'Kouder weer op komst, later meer onzekerheid':
+    tempDiff>=3?'Later mogelijk zachter, maar nog onzeker':
+    mid.filter(r=>wetScore(r)<=1&&brighter(r)).length>=2?'Geregeld zon, verder vooruit onzekerder':'Wolken, zon en af en toe een bui';
   const heading=document.createElement('div');heading.textContent=headline;heading.style.cssText='font-size:19px;line-height:1.25;font-weight:800;margin-bottom:9px;color:#07527a';box.appendChild(heading);
   for(const str of texts){const p=document.createElement('p');p.textContent=str;p.style.cssText='margin:0 0 9px';box.appendChild(p);}
   box.lastElementChild.style.marginBottom='0';
@@ -564,8 +576,19 @@ async def make_images() -> None:
                 #ricoWidgetFacts .ricoEC46Badge{display:inline-block;padding:5px 6px;
                   border-radius:8px;background:#d8eafb;color:#075277;font-weight:850;text-align:center}
                 #ricoWidgetFacts .ricoEC46Main{display:block;font-size:13px;font-weight:750}
-                #ricoWidgetFacts .ricoEC46Signal{display:block;font-size:11px;
-                  color:#536d80;margin-top:3px}
+                #ricoWidgetFacts .ricoEC46Signal{display:flex;flex-wrap:wrap;gap:5px;
+                  margin-top:5px;font-size:11px;color:#536d80}
+                #ricoWidgetFacts .ricoEC46Week{grid-template-columns:74px minmax(0,1fr);
+                  border:1px solid #d5e4f0!important;border-radius:11px;
+                  padding:9px!important;margin:5px 0;background:#ffffffc7!important}
+                #ricoWidgetFacts .ricoEC46Week:nth-of-type(even){background:#edf5ff!important}
+                #ricoWidgetFacts .ricoEC46Main{font-size:13px!important}
+                #ricoWidgetFacts .ricoEC46Track{height:8px;border-radius:20px;
+                  margin-top:8px;background:#dce9f3;position:relative;overflow:hidden}
+                #ricoWidgetFacts .ricoEC46Fill{height:100%;border-radius:20px;
+                  background:linear-gradient(90deg,#248dc4,#f0b34c)}
+                #ricoWidgetFacts .ricoEC46Pill{border-radius:12px;padding:2px 7px;
+                  font-weight:700;background:#e5edf6;color:#315a73}
               `;
               el.appendChild(css);
               // Canadese windchillformule: T in graden Celsius, wind in km/u.
@@ -594,34 +617,49 @@ async def make_images() -> None:
               const box=document.createElement('section');box.id='ricoExportEC46';
               box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:14px;background:#f0f6ff;border:1px solid #c9d8ec;border-radius:14px;color:#17445f;font:14px/1.45 Arial,sans-serif';
               const h=document.createElement('div');h.textContent='📅 EC46 · vooruitblik week 2–6';
-              h.style.cssText='font-weight:850;font-size:18px;margin-bottom:9px;color:#075277';box.appendChild(h);
+              h.style.cssText='font-weight:850;font-size:18px;margin-bottom:5px;color:#075277';box.appendChild(h);
+              const sub=document.createElement('p');sub.textContent='Langetermijntrend · temperatuurbanden per week, geen dagverwachting';
+              sub.style.cssText='margin:0 0 12px;color:#536d80;font-size:11px';box.appendChild(sub);
               const lines=[];
               const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
               if(pack.weeks?.length){
+                const valid=pack.weeks.filter(w=>Number.isFinite(w.txMin)&&Number.isFinite(w.txMax));
+                const axisLo=valid.length?Math.floor(Math.min(...valid.map(w=>Math.min(w.txMin,w.txMax)))-2):0;
+                const axisHi=valid.length?Math.ceil(Math.max(...valid.map(w=>Math.max(w.txMin,w.txMax)))+2):15;
+                const span=Math.max(4,axisHi-axisLo);
                 for(const w of pack.weeks){
                   const delta=Number.isFinite(w.anomaly)?w.anomaly:null;
                   const hasMax=Number.isFinite(w.txMin)&&Number.isFinite(w.txMax);
                   const low=hasMax?Math.floor(Math.min(w.txMin,w.txMax)):null;
                   const high=hasMax?Math.ceil(Math.max(w.txMin,w.txMax)):null;
-                  const actual=hasMax?`maxima ${low} tot ${high} °C`:'maxima niet beschikbaar';
-                  const trend=delta===null?'':delta>=.4?' · warmer dan normaal':delta<=-.4?' · kouder dan normaal':'';
-                  const rain=w.wet===null?'':w.wet>=58?' · natter signaal':w.wet<=42?' · droger signaal':'';
-                  const line=`Week ${w.week} · ${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain}`;
-                  lines.push(line);
+                  const actual=hasMax?(low===high?`maxima rond ${low} °C`:`maxima ${low}–${high} °C`):'maxima niet beschikbaar';
+                  const trend=delta===null?'':delta>=.4?'Warmer dan normaal':delta<=-.4?'Kouder dan normaal':'Rond normaal';
+                  const rain=w.wet===null?'':w.wet>=58?'Natter signaal':w.wet<=42?'Droger signaal':'';
+                  lines.push(`Week ${w.week} · ${fmt(w.start)}–${fmt(w.end)}: ${actual}${rain?' · '+rain.toLowerCase():''}`);
                   const row=document.createElement('div');row.className='ricoEC46Week';
                   const badge=document.createElement('span');badge.className='ricoEC46Badge';badge.textContent='Week '+w.week;
-                  const right=document.createElement('span');
-                  const main=document.createElement('span');main.className='ricoEC46Main';main.textContent=`${fmt(w.start)}–${fmt(w.end)} · ${actual}`;
-                  const detail=document.createElement('span');detail.className='ricoEC46Signal';
-                  detail.textContent=[trend.replace(/^ · /,''),rain.replace(/^ · /,'')].filter(Boolean).join(' · ')||'Weekverwachting';
-                  right.append(main,detail);row.append(badge,right);box.appendChild(row);
+                  const right=document.createElement('div');
+                  const main=document.createElement('div');main.className='ricoEC46Main';main.textContent=`${fmt(w.start)}–${fmt(w.end)} · ${actual}`;
+                  const track=document.createElement('div');track.className='ricoEC46Track';
+                  track.setAttribute('aria-label',hasMax?`Temperatuurband ${low} tot ${high} graden`:'Geen temperatuurband beschikbaar');
+                  if(hasMax){
+                    const fill=document.createElement('div');fill.className='ricoEC46Fill';
+                    fill.style.marginLeft=Math.max(0,100*(low-axisLo)/span).toFixed(1)+'%';
+                    fill.style.width=Math.max(2,Math.min(100,100*(high-low)/span)).toFixed(1)+'%';track.appendChild(fill);
+                  }
+                  const detail=document.createElement('div');detail.className='ricoEC46Signal';
+                  for(const message of [trend,rain].filter(Boolean)){
+                    const pill=document.createElement('span');pill.className='ricoEC46Pill';pill.textContent=message;
+                    detail.appendChild(pill);
+                  }
+                  right.append(main,track,detail);row.append(badge,right);box.appendChild(row);
                 }
               }else{
                 lines.push('EC46-vooruitblik tijdelijk niet beschikbaar.');
                 const row=document.createElement('div');row.textContent=lines[0];row.style.cssText='padding:9px 0';box.appendChild(row);
               }
-              const note=document.createElement('div');note.textContent='Indicatieve weektrend · geen dagverwachting.';
-              note.style.cssText='font-size:11px;color:#526b83;margin-top:9px';box.appendChild(note);
+              const note=document.createElement('div');note.textContent='EC46 is een indicatieve, onzekere weektrend; de bandbreedte is geen verwachting voor elke dag.';
+              note.style.cssText='font-size:11px;color:#526b83;margin-top:10px';box.appendChild(note);
               el.appendChild(box);return {lines,note:note.textContent};
             }""",ec46)
             print('EC46 opmaak:',json.dumps(ec46_display,ensure_ascii=False),flush=True)
@@ -994,7 +1032,7 @@ async def make_images() -> None:
               const original = document.getElementById('ricoExportRandstadNarrative');
               const ptexts = [...(original?.querySelectorAll('p')||[])].map(p=>p.textContent);
               const ec46=document.getElementById('ricoExportEC46');
-              const ec46Lines=ec46?[...ec46.querySelectorAll(':scope > div')].map(x=>x.textContent):[];
+              const ec46Lines=ec46?[...ec46.querySelectorAll('.ricoEC46Week')].map(x=>x.querySelector('.ricoEC46Main')?.textContent||''):[];
               if(ptexts.length!==3)throw new Error('Weerbericht ontbreekt bij PNG-compositie');
               ctx.font=`${Math.round(23*scale)}px Arial`;
               function wrap(str){
@@ -1010,7 +1048,7 @@ async def make_images() -> None:
               const lines=ptexts.map(wrap);
                let plume=null;
                if(plumeImageUrl){try{plume=new Image();plume.src=plumeImageUrl;await plume.decode()}catch(e){plume=null}}
-              if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 2–6'));for(const t of ec46Lines.slice(1))lines.push(wrap(t));}
+              if(ec46Lines.length){lines.push(wrap('EC46 · vooruitblik week 2–6'));for(const t of ec46Lines)lines.push(wrap(t));}
               // Dagelijkse modelzekerheid blijft beschikbaar in de PNG.
               // De oude tekstuele weerkansen zijn bewust verwijderd; de
               // ensemblepluimen zijn nu de visuele kansweergave.
