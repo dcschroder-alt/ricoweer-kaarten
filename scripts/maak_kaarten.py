@@ -694,9 +694,9 @@ async def make_images() -> None:
     return probs.length?probs.reduce((a,b)=>a+b,0)/probs.length:null;
   };
   const quantile=(a,q)=>{if(!a.length)return null;const b=[...a].sort((x,y)=>x-y),i=(b.length-1)*q,l=Math.floor(i);return b[l]+(b[Math.min(l+1,b.length-1)]-b[l])*(i-l)};
-  const txStats=date=>{
+  const tempStats=(date,field)=>{
     const stats=available.map(m=>{
-      const arr=m.days[date]?.tx||[];
+      const arr=m.days[date]?.[field]||[];
       return arr.length>=5?[quantile(arr,.2),quantile(arr,.5),quantile(arr,.8)]:null;
     }).filter(Boolean);
     return stats.length?stats[0].map((_,i)=>stats.reduce((s,a)=>s+a[i],0)/stats.length):null;
@@ -708,10 +708,10 @@ async def make_images() -> None:
       field:'snow',test:x=>x>=.1,otherField:'snowDepth',otherTest:x=>x>=1,
       kind:'dual-chance',color:'#5897cb',otherColor:'#174c93',
       labels:['Sneeuwval (≥ 0,1 cm)','Sneeuwdek (≥ 1 cm, 08:00)']},
-    {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima · P20–P80 en mediaan',kind:'temp',color:'#c95746'}
+    {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima (rood) en nachtminima (blauw) · P20–P80 en mediaan',kind:'temp',color:'#c95746'}
   ]:[
-    {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima · P20–P80 en mediaan',kind:'temp',color:'#c95746'},
-    {title:'🌧️ Neerslagkans',detail:'Minstens 1 mm in 24 uur',field:'rain',test:x=>x>=1,kind:'chance',color:'#267acb'},
+    {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima (rood) en nachtminima (blauw) · P20–P80 en mediaan',kind:'temp',color:'#c95746'},
+    {title:'🌧️ Neerslagkans',detail:'Neerslag ≥ 0,1 mm · Veel neerslag ≥ 10 mm per dag',field:'rain',test:x=>x>=.1,otherField:'rain',otherTest:x=>x>=10,kind:'dual-chance',color:'#267acb',otherColor:'#174c93',labels:['Neerslag (≥ 0,1 mm)','Veel neerslag (≥ 10 mm)']},
     {title:'☀️ Warmtekans',detail:'Dagmaximum ≥ 20 °C',field:'tx',test:x=>x>=20,kind:'chance',color:'#ef943d'}
   ];
   const ns='http://www.w3.org/2000/svg';
@@ -734,20 +734,21 @@ async def make_images() -> None:
     const svg=make('svg',{viewBox:'0 0 480 172',width:'100%',height:'auto',role:'img','aria-label':chart.title});
     const x=i=>38+i*46, top=20,bottom=135;
     let samples;
-    if(chart.kind==='temp')samples=dates.map(txStats);
+    if(chart.kind==='temp')samples=dates.map(d=>({max:tempStats(d,'tx'),min:tempStats(d,'tn')}));
     else if(chart.kind==='dual-chance')samples=dates.map(d=>({
       frost:percentage(chart.field,chart.test,d),
       ice:percentage(chart.otherField,chart.otherTest,d)
     }));
     else samples=dates.map(d=>percentage(chart.field,chart.test,d));
-    if(samples.every(v=>chart.kind==='dual-chance'?(v.frost===null&&v.ice===null):v===null)){
+    if(samples.every(v=>chart.kind==='dual-chance'?(v.frost===null&&v.ice===null):chart.kind==='temp'?!v.max&&!v.min:v===null)){
       const no=document.createElement('div');no.textContent='Geen bruikbare ensemblegegevens voor deze grafiek';
       no.style.cssText='color:#687f93;font-size:12px;padding:25px 10px';card.appendChild(no);
     }else{
       let low=0,high=100;
       if(chart.kind==='temp'){
-        const a=samples.filter(Boolean).flat();low=Math.floor(Math.min(...a)-2);high=Math.ceil(Math.max(...a)+2);
-        if(high-low<6)high=low+6;
+        const a=samples.flatMap(s=>[...(s.max||[]),...(s.min||[])]).filter(Number.isFinite);
+        low=Math.floor(Math.min(...a,-5)-1);high=Math.ceil(Math.max(...a,0)+1);
+        if(high-low<8)high=low+8;
       }
       const y=v=>bottom-(v-low)/(high-low)*(bottom-top);
       for(let i=0;i<=4;i++){
@@ -755,6 +756,15 @@ async def make_images() -> None:
         svg.appendChild(make('line',{x1:38,y1:yy,x2:456,y2:yy,stroke:'#dce8f0','stroke-width':1}));
         svg.appendChild(make('text',{x:32,y:yy+4,'font-size':10,'text-anchor':'end',fill:'#647d91'},
           chart.kind==='temp'?Math.round(v)+'°':Math.round(v)+'%'));
+      }
+      if(chart.kind==='temp'){
+        for(const [target,color,dash] of [[0,'#255b84',null],[-5,'#8aaac1','5 4']]){
+          const yy=y(target);
+          const attrs={x1:38,y1:yy,x2:456,y2:yy,stroke:color,'stroke-width':target===0?1.8:1.3};
+          if(dash)attrs['stroke-dasharray']=dash;
+          svg.appendChild(make('line',attrs));
+          svg.appendChild(make('text',{x:453,y:yy-4,'text-anchor':'end','font-size':9,'font-weight':700,fill:color},target+'°'));
+        }
       }
       if(chart.kind==='dual-chance'){
         samples.forEach((v,i)=>{
@@ -770,22 +780,34 @@ async def make_images() -> None:
           svg.appendChild(make('rect',{x:x(i)-11,y:y(v),width:22,height:Math.max(0,bottom-y(v)),rx:3,fill:chart.color}));
         });
       }else{
-        const valid=samples.map((v,i)=>({i,v})).filter(o=>o.v);
-        // Separate segments to avoid inventing values on missing dates.
-        let segment=[];const segments=[];
-        for(const o of samples.map((v,i)=>({i,v}))){if(o.v)segment.push(o);else if(segment.length){segments.push(segment);segment=[]}}
-        if(segment.length)segments.push(segment);
-        for(const group of segments){
-          const poly=group.map(o=>`${x(o.i)},${y(o.v[2])}`).join(' ')+ ' '+
-            [...group].reverse().map(o=>`${x(o.i)},${y(o.v[0])}`).join(' ');
-          svg.appendChild(make('polygon',{points:poly,fill:'#aed9f1','fill-opacity':'.75'}));
-          svg.appendChild(make('polyline',{points:group.map(o=>`${x(o.i)},${y(o.v[1])}`).join(' '),
-            fill:'none',stroke:chart.color,'stroke-width':3,'stroke-linecap':'round','stroke-linejoin':'round'}));
+        // Draw daily maxima and minima independently, without joining gaps.
+        for(const [field,color,fill] of [['max','#c95746','#f5c9b9'],['min','#2476b7','#bddcf3']]){
+          let segment=[];const segments=[];
+          for(const o of samples.map((v,i)=>({i,v:v[field]}))){
+            if(o.v)segment.push(o);else if(segment.length){segments.push(segment);segment=[];}
+          }
+          if(segment.length)segments.push(segment);
+          for(const group of segments){
+            const poly=group.map(o=>`${x(o.i)},${y(o.v[2])}`).join(' ')+' '+
+              [...group].reverse().map(o=>`${x(o.i)},${y(o.v[0])}`).join(' ');
+            svg.appendChild(make('polygon',{points:poly,fill,'fill-opacity':'.50'}));
+            svg.appendChild(make('polyline',{points:group.map(o=>`${x(o.i)},${y(o.v[1])}`).join(' '),
+              fill:'none',stroke:color,'stroke-width':2.6,'stroke-linecap':'round','stroke-linejoin':'round'}));
+          }
         }
       }
       dates.forEach((d,i)=>svg.appendChild(make('text',{x:x(i),y:157,'font-size':9,
         'text-anchor':'middle',fill:'#486479'},short(d))));
       card.appendChild(svg);
+      if(chart.kind==='temp'){
+        const key=document.createElement('div');key.style.cssText='display:flex;gap:14px;flex-wrap:wrap;padding:2px 9px 5px;font-size:11px;color:#34536d';
+        for(const [label,color] of [['Dagmaximum','#c95746'],['Nachtminimum','#2476b7']]){
+          const item=document.createElement('span');item.style.cssText='display:inline-flex;align-items:center;gap:5px';
+          const swatch=document.createElement('span');swatch.style.cssText='width:13px;height:3px;background:'+color;
+          item.appendChild(swatch);item.appendChild(document.createTextNode(label));key.appendChild(item);
+        }
+        card.appendChild(key);
+      }
       if(chart.kind==='dual-chance'){
         const legend=document.createElement('div');
         legend.style.cssText='display:flex;flex-wrap:wrap;gap:12px;padding:2px 9px 5px;font-size:11px;color:#34536d';
