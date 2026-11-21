@@ -372,11 +372,42 @@ async def make_images() -> None:
     if(kind(r)==='bewolkt')return 'heeft de bewolking de overhand';
     return 'blijft het op de meeste plaatsen droog';
   };
-  const dayText=r=>`${cap(day(r))} ${clause(r)}.`;
+  const maxText=r=>`${round(r.max)} ${round(r.max)===1?'graad':'graden'}`;
+  // Verschillende zinsconstructies voor opeenvolgende dagen, zonder
+  // afwijkende meteorologische claims of de modelmix te veranderen.
+  const firstWeather=r=>{
+    if(veryWet(r))return 'valt geregeld regen';
+    if(kind(r)==='sneeuw')return 'kan sneeuw vallen';
+    if(kind(r)==='onweer')return 'komen buien voor, mogelijk met onweer';
+    if(kind(r)==='buien' && Number.isFinite(r.rain) && r.rain>=.2)
+      return sunny(r)?'wisselen zon en enkele buien elkaar af':'komen verspreid buien voor';
+    if(wetScore(r)===1)return sunny(r)?'is het wisselend zonnig met enkele buien':'trekken enkele buien over de regio';
+    if(sunny(r))return 'is er volop ruimte voor de zon';
+    if(brighter(r))return 'breekt de zon af en toe door';
+    if(kind(r)==='bewolkt')return 'overheerst de bewolking';
+    return 'blijft het overwegend droog';
+  };
+  const secondWeather=(r,previous)=>{
+    if(veryWet(r))return 'Regelmatig valt er regen';
+    if(kind(r)==='sneeuw')return 'Er is kans op sneeuw';
+    if(kind(r)==='onweer')return 'Enkele buien kunnen vergezeld gaan van onweer';
+    if(kind(r)==='buien' && Number.isFinite(r.rain) && r.rain>=.2)
+      return sunny(r)?'Naast zonnige perioden is een bui mogelijk':'Verspreid trekken er enkele buien over';
+    if(wetScore(r)===1)return 'Er komen enkele buien voor';
+    if(sunny(r))return sunny(previous)?'Ook dan laat de zon zich veel zien':'De zon krijgt dan ruim baan';
+    if(brighter(r))return sunny(previous)?'De zon is wat minder vaak te zien':'Af en toe breekt de zon door';
+    if(kind(r)==='bewolkt')return 'Wolkenvelden bepalen grotendeels het weerbeeld';
+    return 'Het blijft overwegend droog';
+  };
+  const todayText=`${cap(day(today))} ${firstWeather(today)}. De temperatuur stijgt tot ${maxText(today)}.`;
   const delta=round(tomorrow.max)-round(today.max);
-  const tempChange=delta<=-3?'Dat is duidelijk kouder.':delta<=-1?'Daarmee wordt het iets kouder.':
-     delta>=3?'Dat is duidelijk zachter.':delta>=1?'Daarmee wordt het iets zachter.':'';
-  const p1=`${dayText(today)} Het wordt ${round(today.max)} graden. ${dayText(tomorrow)} De temperatuur komt uit op ${round(tomorrow.max)} graden.${tempChange?' '+tempChange:''}`;
+  const trend=delta<=-3?'duidelijk kouder':delta<=-1?'wat kouder':
+              delta>=3?'duidelijk zachter':delta>=1?'iets zachter':'';
+  const comparison=trend?`, ${trend} dan ${day(today)}`:'';
+  const tomorrowText=sunny(today)&&sunny(tomorrow)&&wetScore(tomorrow)===0?
+    `Ook ${day(tomorrow)} is het zonnig. Het wordt ${maxText(tomorrow)}${comparison}.`:
+    `${cap(day(tomorrow))}: ${secondWeather(tomorrow,today)}. Het wordt ${maxText(tomorrow)}${comparison}.`;
+  const p1=`${todayText} ${tomorrowText}`;
   // Perioden vormen op basis van samenhangende dagwaarden, niet losse trefwoorden.
   // Dag 3-5: eerst aanhoudend nat benoemen, daarna het omslagmoment.
   const mid=rows.slice(2,5),later=rows.slice(5);
@@ -399,7 +430,7 @@ async def make_images() -> None:
   }else if(mid.filter(veryWet).length>=2){
     p2=`Ook ${day(mid[0])} en de dagen daarna valt geregeld regen.`;
   }else if(mid.filter(r=>wetScore(r)<=1&&brighter(r)).length>=2){
-    p2=`Vanaf ${day(mid[0])} krijgt de zon vaker ruimte en blijft het meestal droog.`;
+    p2=`Na het weekend houdt het overwegend droge weer aan${mid.every(sunny)?' en blijft het zonnig':', met af en toe zon'}.`;
   }else if(mid.some(veryWet)){
     p2=`${cap(day(mid.find(veryWet)))} valt geregeld regen; op de andere dagen zijn er ook droge perioden.`;
   }else{
@@ -413,20 +444,32 @@ async def make_images() -> None:
   const sunLater=later.filter(brighter).length;
   const weatherLater=wetLater>=3?'In de tweede helft van de periode blijft regen regelmatig terugkeren.':
     showerLater+wetLater>=3?'Later in de week krijgen buien en droge momenten allebei ruimte.':
-    sunLater>=3?'Ook verder vooruit zijn er regelmatig zonnige perioden.':'De tweede helft van de periode verloopt grotendeels droog.';
+    sunLater>=3?'Verder vooruit blijven zonnige perioden overheersen.':'De tweede helft van de periode verloopt grotendeels droog.';
   const range=tempRange(later);
   const laterTemps=later.map(r=>round(r.max));
   const laterLo=Math.min(...laterTemps),laterHi=Math.max(...laterTemps);
   const steadyRange=laterLo===laterHi?`rond ${laterLo} graden`:
     laterHi-laterLo===1?`op ${laterLo} of ${laterHi} graden`:
     `tussen ${laterLo} en ${laterHi} graden`;
-  const tempLater=tempDiff<=-3?`De kou wint terrein: de maxima liggen ${range.startsWith('tussen ')?range:'rond '+range}.`:
-    tempDiff>=3?`Later loopt de temperatuur wat op, met maxima ${range.startsWith('tussen ')?range:'van '+range}.`:`De maxima liggen dan ${steadyRange}.`;
+  const periodRange=laterLo===laterHi?`${laterLo} graden`:
+    laterHi-laterLo===1?`${laterLo} of ${laterHi} graden`:`tussen ${laterLo} en ${laterHi} graden`;
+  const tempLater=tempDiff<=-3?
+    `Het wordt kouder, met maxima ${laterLo===laterHi?'rond '+laterLo+' graden':laterHi-laterLo===1?'van '+periodRange:periodRange}.`:
+    tempDiff>=3?`De temperatuur loopt later wat op. De maxima liggen ${laterLo===laterHi?'rond '+laterLo+' graden':laterHi-laterLo===1?'op '+periodRange:periodRange}.`:
+    `De maxima liggen dan ${steadyRange}.`;
   let p3=`${weatherLater} ${tempLater}`;
   const lows=rows.slice(2).filter(r=>Number.isFinite(r.min));
   const min=lows.length?Math.min(...lows.map(r=>r.min)):null;
-  if(min!==null&&min<=0)p3+=' In de koudste nachten kan het plaatselijk rond het vriespunt komen.';
-  else if(min!==null&&min<=2)p3+=` In de koudste nachten daalt de temperatuur tot ongeveer ${round(min)} ${round(min)===1?'graad':'graden'}.`;
+  // KNMI-luchttemperatuur op 1,5-2 m: lichte vorst onder 0 tot -5 C,
+  // matige vorst vanaf -5 C. Geen vorst claimen op uitsluitend 0 C.
+  if(min!==null){
+    const cold=round(min);
+    if(min<=-10)p3+=` In de koudste nachten kan het streng vriezen, met minima rond ${cold} graden.`;
+    else if(min<=-5)p3+=` In de koudste nachten is matige vorst mogelijk, met minima rond ${cold} graden.`;
+    else if(min<0)p3+=cold===0?' Tijdens de koudste nachten kan het net licht vriezen.':` In de koudste nachten vriest het licht, met minima rond ${cold} ${cold===-1?'graad':'graden'}.`;
+    else if(min===0)p3+=' In de koudste nachten ligt de temperatuur rond het vriespunt.';
+    else if(min<=2)p3+=` In de koudste nachten daalt de temperatuur tot ongeveer ${cold} ${cold===1?'graad':'graden'}.`;
+  }
   // De overbodige zonnigste/natste-dagregels maken plaats voor drie Randstadpluimen.
   el.querySelector('.rico5DaySummary')?.remove();
   el.querySelector('.rico5DayHighlights')?.remove();
