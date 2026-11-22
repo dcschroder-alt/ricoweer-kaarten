@@ -1,9 +1,11 @@
 name: Ricoweer - kaarten voor WordPress
 
-
 on:
   workflow_dispatch:
   schedule:
+    # Vast publicatieschema in Nederlandse tijd (CET/CEST).
+    # GitHub verwerkt zomer-/wintertijd via Europe/Amsterdam.
+    # GitHub Actions kan geplande runs vertragen of incidenteel overslaan.
     - cron: '0 0,5,8,11,14,17,20 * * *'
       timezone: 'Europe/Amsterdam'
     - cron: '30 1 * * *'
@@ -21,11 +23,16 @@ concurrency:
 jobs:
   publiceer:
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 25
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Toon aanleiding voor de publicatie
+        run: |
+          echo "Startwijze: ${{ github.event_name }}"
+          echo "Nederlandse tijd: $(TZ=Europe/Amsterdam date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "Branch: ${{ github.ref_name }}"
       - name: Haal exportcode op
         uses: actions/checkout@v4
       - name: Activeer Python
@@ -40,34 +47,11 @@ jobs:
           python -m playwright install chromium
       - name: Controleer exporter
         run: python -m py_compile scripts/maak_kaarten.py
-      - name: Genereer kaarten met herstelpogingen
-        shell: bash
+      - name: Genereer kaarten met de Ricoweer-dagmodelmix
+        run: python scripts/maak_kaarten.py
         env:
           SOURCE_MAP_URL: https://dcschroder-alt.github.io/Regioweer/weerkaart.html
           OUTPUT_DIR: public
-          MAX_WAIT_MS: '90000'
-          RETRY_WAIT_MS: '45000'
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            echo "::group::Kaarten genereren - poging $attempt/3"
-            rm -rf public
-            if python scripts/maak_kaarten.py; then
-              echo "::endgroup::"
-              echo "Export gelukt in poging $attempt"
-              break
-            fi
-            echo "::endgroup::"
-            if [ "$attempt" -eq 3 ]; then
-              echo "::error::Na drie pogingen geen volledige actuele modelscan. Bestaande Pages-deployment blijft behouden."
-              exit 1
-            fi
-            echo "Bron-API tijdelijk niet beschikbaar. Wacht 120 seconden en probeer met een nieuwe browsersessie opnieuw."
-            sleep 120
-          done
-          for file in morgen.png overmorgen.png widget.png randstad-5dagen.png randstad-10dagen-compact.png randstad-10dagen.png index.html; do
-            test -s "public/$file" || { echo "::error::Ontbrekend of leeg bestand: $file"; exit 1; }
-          done
       - name: Configureer GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload de PNG's
