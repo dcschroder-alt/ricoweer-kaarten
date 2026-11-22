@@ -596,6 +596,39 @@ async def make_images() -> None:
               const windBft=kmh=>kmh<1?0:kmh<6?1:kmh<12?2:kmh<20?3:
                 kmh<29?4:kmh<39?5:kmh<50?6:kmh<62?7:kmh<75?8:kmh<89?9:
                 kmh<103?10:kmh<118?11:12;
+              // Kleine modelspreiding is bij beperkte modeldekking GEEN hoge zekerheid.
+              // Gebruik de echte regionale modelaantallen uit de scan indien beschikbaar.
+              const cacheKey='rico-national-scan-v75-35punten';
+              let pack=null;try{pack=JSON.parse(localStorage.getItem(cacheKey)||'null')}catch(e){}
+              let corrected=0;
+              for(const row of el.querySelectorAll('.rico5DayRow')){
+                const status=row.querySelector('.rico5DayConfidence');
+                if(!status)continue;
+                const date=row.dataset.date;
+                const d=pack?.days?.find(x=>x.date===date);
+                // De regiofunctie levert de afzonderlijke dagmodelmedianen per model.
+                // Gebruik géén geteld aantal roosterpunten als aantal modellen.
+                let n=null;
+                try{
+                  if(d&&typeof regionalModelData==='function'){
+                    const models=regionalModelData(date);
+                    n=models.filter(m=>Number.isFinite(m.tx)).length;
+                  }
+                }catch(e){}
+                const reason=status.textContent||'';
+                const insufficient= (n!==null&&n<4)||/weinig beschikbare modellen|modeldekking beperkter/i.test(reason);
+                if(!insufficient)continue;
+                const match=(row.querySelector('.rico5DayRange')?.textContent||'').match(/(-?\d+)\s*[–-]\s*(-?\d+)\s*°/);
+                const spread=match?Math.abs(Number(match[2])-Number(match[1])):null;
+                const limit=(n!==null&&n<4)?`weinig modellen (${n})`:'beperktere modeldekking';
+                const lead=Array.from(el.querySelectorAll('.rico5DayRow')).indexOf(row);
+                const phrase=spread!==null&&spread<=3?'Kleine temperatuurspreiding':
+                             spread!==null&&spread>5?'Grote temperatuurspreiding':'Modelvergelijking';
+                status.textContent='🎯 '+phrase+' · '+limit+(lead>=5?' · verder vooruit':'');
+                status.dataset.level='redelijk';
+                status.title='Indicatie op basis van werkelijk beschikbare dagmodellen; modelspreiding alleen bepaalt geen algemene zekerheid.';
+                corrected++;
+              }
               let count=0;
               for(const row of el.querySelectorAll('.rico5DayRow')){
                 const t=Number(row.dataset.max),v=Number(row.dataset.wind);
@@ -606,10 +639,10 @@ async def make_images() -> None:
                 if(!target)continue;
                 const line=document.createElement('small');
                 line.className='rico5DayFeels';
-                line.textContent='🌬️ Gevoel overdag ca. '+Math.round(chill)+'° (windchill)';
+                line.textContent='🌬️ Voelt als '+Math.round(chill)+'°';
                 target.appendChild(line);count++;
               }
-              return {feelsDays:count,dividerRemoved:true};
+              return {feelsDays:count,confidenceCorrected:corrected,dividerRemoved:true};
             }""")
             print('WordPress dagpresentatie:',presentation,flush=True)
             print('EC46 diagnose:',json.dumps(ec46,ensure_ascii=False),flush=True)
@@ -621,6 +654,21 @@ async def make_images() -> None:
               const sub=document.createElement('p');sub.textContent='Langetermijntrend · temperatuurbanden per week, geen dagverwachting';
               sub.style.cssText='margin:0 0 12px;color:#536d80;font-size:11px';box.appendChild(sub);
               const lines=[];
+              const validTrends=(pack.weeks||[]).filter(w=>Number.isFinite(w.anomaly));
+              if(validTrends.length>=2){
+                const classify=w=>w.anomaly>=.4?'zachter':w.anomaly<=-.4?'kouder':'rond normaal';
+                const first=classify(validTrends[0]),last=classify(validTrends[validTrends.length-1]);
+                let summary='';
+                if(first==='kouder'&&last==='zachter')summary='Eerst kouder dan normaal, later een zachter signaal.';
+                else if(first==='zachter'&&last==='kouder')summary='Eerst zachter dan normaal, verder vooruit een kouder signaal.';
+                else if(validTrends.every(w=>w.anomaly<=-.4))summary='De komende weken overwegend een kouder signaal.';
+                else if(validTrends.every(w=>w.anomaly>=.4))summary='De komende weken overwegend een zachter signaal.';
+                else if(first===last&&first!=='rond normaal')summary=`Voorlopig vooral ${first} dan normaal, met wisselende sterkte.`;
+                else summary='De temperatuurafwijkingen wisselen per week; de trend is niet eenduidig.';
+                const brief=document.createElement('div');brief.className='ricoEC46Brief';brief.textContent=summary;
+                brief.style.cssText='margin:0 0 11px;padding:9px 11px;background:#e1f0fb;border-left:4px solid #2587bd;border-radius:8px;font-size:13px;font-weight:750;color:#1a5276';
+                box.appendChild(brief);
+              }
               const fmt=d=>new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d+'T12:00:00Z'));
               if(pack.weeks?.length){
                 const valid=pack.weeks.filter(w=>Number.isFinite(w.txMin)&&Number.isFinite(w.txMax));
@@ -798,14 +846,14 @@ async def make_images() -> None:
   };
   // Only the documented three plots, based on actual members from 2–3 representative points.
   const charts=winter?[
-    {title:'❄️ Vorst- en ijsdagkans',detail:'Vorst: minimum < 0 °C · IJsdag: maximum < 0 °C',field:'tn',test:x=>x<0,otherField:'tx',otherTest:x=>x<0,kind:'dual-chance',color:'#267acb',otherColor:'#174c93'},
+    {title:'❄️ Vorst- en ijsdagkans',detail:'Vorst: minimum < 0 °C · IJsdag: maximum < 0 °C',field:'tn',test:x=>x<0,otherField:'tx',otherTest:x=>x<0,kind:'dual-chance',color:'#339ddd',otherColor:'#123f79'},
     {title:'🌨️ Sneeuwval en sneeuwdek',detail:'Sneeuwval ≥ 0,1 cm per dag · sneeuwdek ≥ 1 cm om 08:00 uur',
       field:'snow',test:x=>x>=.1,otherField:'snowDepth',otherTest:x=>x>=1,
       kind:'dual-chance',color:'#5897cb',otherColor:'#174c93',
       labels:['Sneeuwval (≥ 0,1 cm)','Sneeuwdek (≥ 1 cm, 08:00)']},
-    {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima (rood) en nachtminima (blauw) · P20–P80 en mediaan',kind:'temp',color:'#c95746'}
+    {title:'🌡️ Temperatuurpluim',detail:'Rood: dagmaximum · blauw: nachtminimum met spreiding (P20–P80) · 0° en −5° referentie',kind:'temp',color:'#c95746'}
   ]:[
-    {title:'🌡️ Temperatuurpluim',detail:'Dagmaxima (rood) en nachtminima (blauw) · P20–P80 en mediaan',kind:'temp',color:'#c95746'},
+    {title:'🌡️ Temperatuurpluim',detail:'Rood: dagmaximum · blauw: nachtminimum met spreiding (P20–P80) · 0° en −5° referentie',kind:'temp',color:'#c95746'},
     {title:'🌧️ Neerslagkans',detail:'Neerslag ≥ 0,1 mm · Veel neerslag ≥ 10 mm per dag',field:'rain',test:x=>x>=.1,otherField:'rain',otherTest:x=>x>=10,kind:'dual-chance',color:'#267acb',otherColor:'#174c93',labels:['Neerslag (≥ 0,1 mm)','Veel neerslag (≥ 10 mm)']},
     {title:'☀️ Warmtekans',detail:'Dagmaximum ≥ 20 °C',field:'tx',test:x=>x>=20,kind:'chance',color:'#ef943d'}
   ];
@@ -848,27 +896,29 @@ async def make_images() -> None:
       const y=v=>bottom-(v-low)/(high-low)*(bottom-top);
       for(let i=0;i<=4;i++){
         const v=low+(high-low)*i/4,yy=y(v);
-        svg.appendChild(make('line',{x1:38,y1:yy,x2:456,y2:yy,stroke:'#dce8f0','stroke-width':1}));
-        svg.appendChild(make('text',{x:32,y:yy+4,'font-size':10,'text-anchor':'end',fill:'#647d91'},
-          chart.kind==='temp'?Math.round(v)+'°':Math.round(v)+'%'));
+        if(chart.kind!=='temp'||(Math.abs(v)>1.3&&Math.abs(v+5)>1.3)){
+          svg.appendChild(make('line',{x1:38,y1:yy,x2:456,y2:yy,stroke:'#dce8f0','stroke-width':1}));
+          svg.appendChild(make('text',{x:32,y:yy+4,'font-size':10,'text-anchor':'end',fill:'#647d91'},
+            chart.kind==='temp'?Math.round(v)+'°':Math.round(v)+'%'));
+        }
       }
       if(chart.kind==='temp'){
-        for(const [target,color,dash] of [[0,'#255b84',null],[-5,'#8aaac1','5 4']]){
+        for(const [target,color,dash] of [[0,'#174c79',null],[-5,'#7398b2','5 4']]){
           const yy=y(target);
-          const attrs={x1:38,y1:yy,x2:456,y2:yy,stroke:color,'stroke-width':target===0?1.8:1.3};
+          const attrs={x1:38,y1:yy,x2:456,y2:yy,stroke:color,'stroke-width':target===0?2.1:1.2};
           if(dash)attrs['stroke-dasharray']=dash;
           svg.appendChild(make('line',attrs));
-          svg.appendChild(make('text',{x:453,y:yy-4,'text-anchor':'end','font-size':9,'font-weight':700,fill:color},target+'°'));
+          svg.appendChild(make('text',{x:32,y:yy-5,'text-anchor':'end','font-size':10,'font-weight':800,fill:color},target+'°'));
         }
       }
       if(chart.kind==='dual-chance'){
         samples.forEach((v,i)=>{
           if(Number.isFinite(v.frost))svg.appendChild(make('rect',{
-            x:x(i)-17,y:y(v.frost),width:15,height:Math.max(0,bottom-y(v.frost)),
-            rx:2,fill:chart.color}));
+            x:x(i)-18,y:y(v.frost),width:16,height:Math.max(0,bottom-y(v.frost)),
+            rx:2,fill:chart.color,stroke:'#fff','stroke-width':.6}));
           if(Number.isFinite(v.ice))svg.appendChild(make('rect',{
-            x:x(i)+2,y:y(v.ice),width:15,height:Math.max(0,bottom-y(v.ice)),
-            rx:2,fill:chart.otherColor}));
+            x:x(i)+3,y:y(v.ice),width:16,height:Math.max(0,bottom-y(v.ice)),
+            rx:2,fill:chart.otherColor,stroke:'#fff','stroke-width':.6}));
         });
       }else if(chart.kind==='chance'){
         samples.forEach((v,i)=>{if(v===null)return;
