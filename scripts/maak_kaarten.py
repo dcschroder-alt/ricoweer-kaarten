@@ -25,6 +25,7 @@ MIN_POINTS = 12
 MAX_AGE_MS = 4 * 60 * 60 * 1000
 MAX_WAIT_MS = int(os.environ.get("MAX_WAIT_MS", "110000"))
 RETRY_WAIT_MS = int(os.environ.get("RETRY_WAIT_MS", "70000"))
+SCAN_CACHE_PATH = Path(os.environ.get('SCAN_CACHE_PATH', '.cache/rico_national_scan.json'))
 
 EXPORT_CSS = """
 #ricoLiveShell {max-width:1060px!important; padding:12px 10px!important}
@@ -138,13 +139,73 @@ QUALITY_JS = """el => {
 }"""
 
 
+def prior_ec46_snapshot() -> dict | None:
+    """Only prior *published* EC46 source timestamp; never compare two fetches of same run."""
+    from urllib.request import Request, urlopen
+    from urllib.parse import urljoin
+    base=os.environ.get('PUBLISHED_PAGES_URL',
+        'https://dcschroder-alt.github.io/ricoweer-kaarten/').rstrip('/')+'/'
+    try:
+        with urlopen(Request(urljoin(base,'ec46-snapshot.json'),
+                   headers={'User-Agent':'Ricoweer-EC46-compare/1.0'}),timeout=8) as r:
+            raw=r.read(25000)
+        pack=json.loads(raw)
+        if not isinstance(pack,dict) or not isinstance(pack.get('weeks'),list):return None
+        return pack
+    except Exception as exc:
+        print('Nog geen vorige EC46-snapshot beschikbaar:',str(exc)[:120],flush=True)
+        return None
+
+
+def read_scan_cache(expected_dates: list[str]) -> dict | None:
+    """GitHub Actions cache is private to the repo job, never published as a Pages PNG."""
+    try:
+        if not SCAN_CACHE_PATH.is_file():return None
+        if SCAN_CACHE_PATH.stat().st_size>12*1024*1024:return None
+        pack=json.loads(SCAN_CACHE_PATH.read_text(encoding='utf-8'))
+        ts=int(pack.get('savedAt') or 0)
+        age=datetime.now().timestamp()*1000-ts
+        if age<0 or age>MAX_AGE_MS:return None
+        if len(pack.get('models',[]))<2:return None
+        days={day.get('date'):day for day in pack.get('days',[]) if isinstance(day,dict)}
+        for d in expected_dates:
+            pts=days.get(d,{}).get('pts',[])
+            if sum(1 for pt in pts if isinstance(pt,dict) and
+                   isinstance(pt.get('tx'),(int,float)) and
+                   isinstance(pt.get('tn'),(int,float)) and
+                   isinstance(pt.get('point'),dict) and
+                   isinstance(pt['point'].get('lat'),(int,float)) and
+                   isinstance(pt['point'].get('lon'),(int,float)))<MIN_POINTS:return None
+        print(f'Geldige scan uit workflow-cache gevonden ({age/60000:.0f} minuten oud).',flush=True)
+        return pack
+    except (OSError,ValueError,TypeError,AttributeError) as exc:
+        print('Scan-cache niet bruikbaar:',str(exc)[:180],flush=True)
+        return None
+
+
+def write_scan_cache(pack: dict) -> None:
+    if not pack or not isinstance(pack.get('days'),list):return
+    try:
+        SCAN_CACHE_PATH.parent.mkdir(parents=True,exist_ok=True)
+        tmp=SCAN_CACHE_PATH.with_suffix('.tmp')
+        tmp.write_text(json.dumps(pack,separators=(',',':')),encoding='utf-8')
+        tmp.replace(SCAN_CACHE_PATH)
+        print('Gevalideerde scan bewaard voor een volgende GitHub-run.',flush=True)
+    except OSError as exc:
+        print('Scan-cache niet opgeslagen (export gaat door):',exc,flush=True)
+
+
 async def make_images() -> None:
     if not SOURCE.startswith("https://") and os.environ.get("ALLOW_HTTP_FOR_TEST") != "1":
         raise RuntimeError("De bronkaart moet via HTTPS beschikbaar zijn.")
     nl_today = datetime.now(ZoneInfo("Europe/Amsterdam")).date()
     expected = [(nl_today + timedelta(days=i)).isoformat() for i in (1, 2)]
+    cached_scan = read_scan_cache(expected)
     print(f"Dagen voor WordPress: morgen {expected[0]}, overmorgen {expected[1]}", flush=True)
+    previous_ec46 = prior_ec46_snapshot()
     errors = []
+    throttled_urls = set()
+    print("API-beleid: geen oude modelscan als nieuw; HTTP 429 wordt afzonderlijk gemeld.", flush=True)
 
     async with async_playwright() as playwright:
         browser_opts = {"headless": True, "args": ["--no-sandbox"]}
@@ -156,10 +217,25 @@ async def make_images() -> None:
                 viewport={"width": 1140, "height": 1400}, device_scale_factor=2,
                 locale="nl-NL", timezone_id="Europe/Amsterdam", service_workers="block",
             )
+            if cached_scan:
+                # Seed the origin's localStorage before Ricoweer's source JS starts.
+                # Page logic decides whether to use the stored scan; exporter validates again.
+                from urllib.parse import urlparse
+                origin = f"{urlparse(SOURCE).scheme}://{urlparse(SOURCE).netloc}"
+                payload = json.dumps(cached_scan,separators=(',',':'))
+                await context.add_init_script(script=(
+                    "(()=>{try{if(location.origin!=="+json.dumps(origin)+")return;"
+                    "localStorage.setItem("+json.dumps(SCAN_KEY)+","+json.dumps(payload)+");"
+                    "}catch(e){}})();"))
             page = await context.new_page()
             page.on("pageerror", lambda e: errors.append(str(e)) if len(errors) < 15 else None)
             page.on("requestfailed", lambda req: errors.append(f"Aanvraag mislukt: {req.url[:180]} ({req.failure})") if len(errors) < 15 else None)
-            page.on("response", lambda res: errors.append(f"HTTP {res.status}: {res.url[:180]}") if res.status >= 400 and len(errors) < 15 else None)
+            def track_response(res):
+                if res.status == 429:
+                    throttled_urls.add(res.url.split('?')[0])
+                if res.status >= 400 and len(errors) < 15:
+                    errors.append(f"HTTP {res.status}: {res.url[:180]}")
+            page.on("response", track_response)
             page.set_default_timeout(25000)
             from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
             u = urlparse(SOURCE)
@@ -188,6 +264,11 @@ async def make_images() -> None:
                     debug = await page.evaluate(DEBUG_JS, SCAN_KEY)
                     print(f"Landelijke scan niet compleet na poging {attempt + 1}:", json.dumps(debug, ensure_ascii=False), flush=True)
                     print("Browser- en netwerkfouten:", errors[-15:], flush=True)
+                    if throttled_urls:
+                        raise RuntimeError("Open-Meteo heeft aanvragen beperkt (HTTP 429). "
+                                           "Nieuwe modelscan gestopt om extra verzoeken te vermijden; "
+                                           "vorige GitHub Pages-publicatie blijft staan. Bronnen: " +
+                                           ", ".join(sorted(throttled_urls))) from exc
                     if attempt == 1:
                         raise RuntimeError("Geen twee complete, actuele dagkaarten na twee pogingen; bestaande publicatie blijft behouden.") from exc
                     print("Herstart bronpagina voor een nieuwe modelscan...", flush=True)
@@ -199,6 +280,10 @@ async def make_images() -> None:
                 SCAN_KEY,
             )
             print("Gecontroleerde landelijke modelmix:", json.dumps(info, ensure_ascii=False), flush=True)
+            validated_pack = await page.evaluate("key=>JSON.parse(localStorage.getItem(key)||'null')",SCAN_KEY)
+            if validated_pack and cached_scan and validated_pack.get('savedAt') == cached_scan.get('savedAt'):
+                print('Publicatie gebruikt gevalideerde cachedagscan; oorspronkelijke scantijd blijft zichtbaar.',flush=True)
+            write_scan_cache(validated_pack)
             # We vergroten bij de PNG-export ook de labels, omdat WordPress
             # de 1000px brede kaart op mobiele schermen verkleint. CSS geldt
             # alleen op deze headless exportpagina, niet in Ricoweer zelf.
@@ -471,9 +556,12 @@ async def make_images() -> None:
   let p3=`${weatherLater} ${tempLater}`;
   const lows=rows.slice(2).filter(r=>Number.isFinite(r.min));
   const min=lows.length?Math.min(...lows.map(r=>r.min)):null;
+  const frostNights=lows.filter(r=>r.min<0).length;
+  const frostIntro=frostNights>=2?` Volgens de dagverwachting komt het op ${frostNights} nachten tot vorst; de precieze minima worden verder vooruit onzekerder.`:'';
   // KNMI-luchttemperatuur op 1,5-2 m: lichte vorst onder 0 tot -5 C,
   // matige vorst vanaf -5 C. Geen vorst claimen op uitsluitend 0 C.
   if(min!==null){
+    p3+=frostIntro;
     const cold=round(min);
     if(min<=-10)p3+=` In de koudste nachten kan het streng vriezen, met minima rond ${cold} graden.`;
     else if(min<=-5)p3+=` In de koudste nachten is matige vorst mogelijk, met minima rond ${cold} graden.`;
@@ -516,7 +604,7 @@ async def make_images() -> None:
             # EC46: verse GitHub-browser heeft meestal geen localStorage-cache.
             # Gebruik de bestaande Ricoweer-functie; die hergebruikt cache indien aanwezig.
             ec46 = await widget_page.evaluate(r"""async () => {
-              const result={weeks:[],error:null};
+              const result={weeks:[],error:null,sourceAt:null};
               try {
                 let pack=null;
                 try {pack=JSON.parse(localStorage.getItem('rw_ec46_6week_v1026')||'null')}catch(e){}
@@ -527,6 +615,7 @@ async def make_images() -> None:
                   pack=await lr6Fetch(false);
                 }
                 if(!pack?.data?.weekly?.time?.length)throw Error('Geen EC46-weekgegevens');
+                result.sourceAt=Number.isFinite(Number(pack.savedAt))?Number(pack.savedAt):null;
                 // Neem exact de EC46-maximaspreiding uit de bestaande app over.
                 // De app combineert KNMI TX-klimaat 1996-2025 met EC46-afwijking,
                 // of gebruikt dagelijkse EC46-maxima als terugval.
@@ -601,32 +690,57 @@ async def make_images() -> None:
               const cacheKey='rico-national-scan-v75-35punten';
               let pack=null;try{pack=JSON.parse(localStorage.getItem(cacheKey)||'null')}catch(e){}
               let corrected=0;
-              for(const row of el.querySelectorAll('.rico5DayRow')){
+              const spread=values=>values.length>=2?Math.max(...values)-Math.min(...values):null;
+              const dailyRows=[...el.querySelectorAll('.rico5DayRow')];
+              for(const [lead,row] of dailyRows.entries()){
                 const status=row.querySelector('.rico5DayConfidence');
                 if(!status)continue;
                 const date=row.dataset.date;
-                const d=pack?.days?.find(x=>x.date===date);
-                // De regiofunctie levert de afzonderlijke dagmodelmedianen per model.
-                // Gebruik géén geteld aantal roosterpunten als aantal modellen.
-                let n=null;
-                try{
-                  if(d&&typeof regionalModelData==='function'){
-                    const models=regionalModelData(date);
-                    n=models.filter(m=>Number.isFinite(m.tx)).length;
+                // regionalModelData is scoped to the widget IIFE and therefore not
+                // callable from page.evaluate. Recalculate the SAME independent
+                // regional model medians using the validated cached daily scan.
+                let models=[];
+                const day=pack?.days?.find(d=>d.date===date);
+                const groups=new Map();
+                for(const p of (day?.pts||[])){
+                  if(!['Randstad-kust','Randstad-west','Randstad-oost'].includes(p?.point?.r))continue;
+                  for(const value of (p.modelVals||[])){
+                    if(!value?.model)continue;
+                    if(!groups.has(value.model))groups.set(value.model,[]);
+                    groups.get(value.model).push(value);
                   }
-                }catch(e){}
-                const reason=status.textContent||'';
-                const insufficient= (n!==null&&n<4)||/weinig beschikbare modellen|modeldekking beperkter/i.test(reason);
-                if(!insufficient)continue;
-                const match=(row.querySelector('.rico5DayRange')?.textContent||'').match(/(-?\d+)\s*[–-]\s*(-?\d+)\s*°/);
-                const spread=match?Math.abs(Number(match[2])-Number(match[1])):null;
-                const limit=(n!==null&&n<4)?`weinig modellen (${n})`:'beperktere modeldekking';
-                const lead=Array.from(el.querySelectorAll('.rico5DayRow')).indexOf(row);
-                const phrase=spread!==null&&spread<=3?'Kleine temperatuurspreiding':
-                             spread!==null&&spread>5?'Grote temperatuurspreiding':'Modelvergelijking';
-                status.textContent='🎯 '+phrase+' · '+limit+(lead>=5?' · verder vooruit':'');
-                status.dataset.level='redelijk';
-                status.title='Indicatie op basis van werkelijk beschikbare dagmodellen; modelspreiding alleen bepaalt geen algemene zekerheid.';
+                }
+                const median=a=>{
+                  const nums=a.filter(Number.isFinite).sort((a,b)=>a-b);
+                  return nums.length?nums.length%2?nums[Math.floor(nums.length/2)]:
+                    (nums[nums.length/2-1]+nums[nums.length/2])/2:null;
+                };
+                models=[...groups].map(([model,vals])=>({model,
+                    tx:median(vals.map(v=>v.tx)), rain:median(vals.map(v=>v.rain)),
+                    wind:median(vals.map(v=>v.wind)),gust:median(vals.map(v=>v.gust))}));
+                const measure=field=>models.map(m=>m[field]).filter(Number.isFinite);
+                const tx=measure('tx'),rain=measure('rain'),wind=measure('wind'),gust=measure('gust');
+                const n=tx.length,ts=spread(tx),rs=spread(rain),ws=spread(wind),gs=spread(gust);
+                if(n<2 || rain.length<2 || wind.length<2){
+                  status.textContent='🎯 Modeldekking beperkt · onvoldoende vergelijkbare modellen';
+                  status.dataset.level='redelijk';
+                  corrected++;continue;
+                }
+                const reasons=[];
+                if(ts>3.5)reasons.push('temperatuur');
+                if(rs>4)reasons.push('neerslag');
+                if(ws>18)reasons.push('wind');
+                if(gs!==null&&gs>25&&!reasons.includes('wind'))reasons.push('windstoten');
+                const high=n>=4 && rain.length>=3 && wind.length>=3 && ts<=2.5 && rs<=4 && ws<=18 && lead<5;
+                const low=ts>5||rs>12||ws>30||(lead>=7&&ts>3.5);
+                const label=high?'hoog':low?'beperkt':'redelijk';
+                const reason=n<4?'weinig modellen ('+n+')':reasons.length?
+                  'vooral '+reasons.slice(0,2).join(' en ')+' onzeker':
+                  lead>=5?'verder vooruit, grotere onzekerheid':'modellen liggen dicht bij elkaar';
+                status.textContent='🎯 Zekerheid '+label+' · '+reason;
+                status.dataset.level=high?'hoog':low?'laag':'redelijk';
+                status.title=n+' temperatuurmodellen, '+rain.length+' neerslagmodellen, '+wind.length+
+                  ' windmodellen. Indicatie op basis van spreiding en dekking, geen gekalibreerde kans.';
                 corrected++;
               }
               let count=0;
@@ -646,6 +760,8 @@ async def make_images() -> None:
             }""")
             print('WordPress dagpresentatie:',presentation,flush=True)
             print('EC46 diagnose:',json.dumps(ec46,ensure_ascii=False),flush=True)
+            ec46['previous'] = previous_ec46 if previous_ec46 and (
+                previous_ec46.get('sourceAt') != ec46.get('sourceAt')) else None
             ec46_display = await forecast.evaluate(r"""(el,pack) => {
               const box=document.createElement('section');box.id='ricoExportEC46';
               box.style.cssText='box-sizing:border-box;margin:12px 8px;padding:14px;background:#f0f6ff;border:1px solid #c9d8ec;border-radius:14px;color:#17445f;font:14px/1.45 Arial,sans-serif';
@@ -696,6 +812,16 @@ async def make_images() -> None:
                     fill.style.width=Math.max(2,Math.min(100,100*(high-low)/span)).toFixed(1)+'%';track.appendChild(fill);
                   }
                   const detail=document.createElement('div');detail.className='ricoEC46Signal';
+                  const previous=pack.previous?.weeks?.find(p=>p.week===w.week && p.start===w.start);
+                  if(previous && Number.isFinite(previous.anomaly) && Number.isFinite(delta)){
+                    const diff=delta-previous.anomaly;
+                    if(Math.abs(diff)>=0.5){
+                      const badge=document.createElement('span');badge.className='ricoEC46Pill';
+                      badge.textContent=(diff>0?'↗ Warmer':'↘ Kouder')+' dan vorige publicatie ('+
+                        Math.abs(diff).toFixed(1).replace('.',',')+'° afwijkingsverschil)';
+                      detail.appendChild(badge);
+                    }
+                  }
                   for(const message of [trend,rain].filter(Boolean)){
                     const pill=document.createElement('span');pill.className='ricoEC46Pill';pill.textContent=message;
                     detail.appendChild(pill);
@@ -710,7 +836,39 @@ async def make_images() -> None:
               note.style.cssText='font-size:11px;color:#526b83;margin-top:10px';box.appendChild(note);
               el.appendChild(box);return {lines,note:note.textContent};
             }""",ec46)
+            quality_text=await forecast.evaluate("""el=>{
+              const rows=[...el.querySelectorAll('.rico5DayRow')].map(n=>({
+                date:n.dataset.date,type:(n.dataset.type||'').toLowerCase(),
+                max:Number(n.dataset.max),min:Number(n.dataset.min),
+                rain:Number(n.dataset.rain),sun:Number(n.dataset.sun),
+                confidence:(n.querySelector('.rico5DayConfidence')?.textContent||'')}));
+              const issues=[];
+              if(rows.length!==10)issues.push('Niet precies 10 dagregels');
+              for(let i=0;i<rows.length;i++){
+                const r=rows[i];
+                if(!Number.isFinite(r.max)||!Number.isFinite(r.min)||r.max<r.min-1)
+                  issues.push(r.date+': minimum/maximum ongeldig');
+                if(!Number.isFinite(r.rain)||r.rain<0||!Number.isFinite(r.sun)||r.sun<0||r.sun>24)
+                  issues.push(r.date+': zon/neerslag ongeldig');
+                if(/zonnig|veel zon/.test(r.type)&&r.sun<1)
+                  issues.push(r.date+': zonnig terwijl minder dan 1 uur zon');
+                if(/droog/.test(r.type)&&r.rain>=8)
+                  issues.push(r.date+': droog versus veel regen');
+                if(/zekerheid hoog/i.test(r.confidence)&&/weinig|beperkt|onvoldoende/i.test(r.confidence))
+                  issues.push(r.date+': tegenstrijdige modelzekerheid');
+                if(i && Date.parse(r.date+'T12:00:00Z')-Date.parse(rows[i-1].date+'T12:00:00Z')!==86400000)
+                  issues.push(r.date+': geen opeenvolgende dag');
+              }
+              return {issues,checked:rows.length};
+            }""")
+            print('Redactionele dagcontrole:',quality_text,flush=True)
+            if quality_text['issues']:
+                raise RuntimeError('Dagwaarden en weersymbolen spreken elkaar tegen: '+
+                    '; '.join(quality_text['issues']))
             print('EC46 opmaak:',json.dumps(ec46_display,ensure_ascii=False),flush=True)
+            if ec46.get('weeks') and ec46.get('sourceAt'):
+                (OUT/'ec46-snapshot.json').write_text(json.dumps({
+                    'sourceAt':ec46['sourceAt'],'weeks':ec46['weeks']},ensure_ascii=False),encoding='utf-8')
             # Optionele, werkelijk regionale ECMWF/GEFS-pluimen. Bronstoring mag
             # de dagverwachting of de succesvolle kaartenexport nooit blokkeren.
             plume_image_url = None
@@ -726,6 +884,7 @@ async def make_images() -> None:
     {name:'Utrecht/Flevoland',lat:52.10,lon:5.18}
   ];
   const models = ['ecmwf_ifs025_ensemble','ncep_gefs025'];
+  const fetchedAt=Date.now();
   const vars = ['temperature_2m','precipitation','snowfall'];
   const fetchModel = async model => {
     const q = new URLSearchParams({
@@ -865,7 +1024,7 @@ async def make_images() -> None:
   heading.style.cssText='font-weight:800;font-size:18px;margin:0 0 4px';section.appendChild(heading);
   const note=document.createElement('div');
   note.textContent=available.length?'ECMWF ENS'+(available.some(m=>m.model.includes('gefs'))?' + GFS GEFS':'')+
-    ' · regionale mediaan van representatieve punten · actuele ensembleleden':
+    ' · regionale mediaan · ensemble-aanvraag '+new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(fetchedAt)):
     'Ensemblegegevens tijdelijk niet beschikbaar; geen kansen ingevuld.';
   note.style.cssText='font-size:11px;color:#536f83;margin-bottom:10px';section.appendChild(note);
   const short=date=>new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric',timeZone:'UTC'})
@@ -997,15 +1156,20 @@ async def make_images() -> None:
     section.appendChild(card);
   }
   const source=document.createElement('div');
-  source.textContent='Modelkansen = aandeel ensembleleden, per bron en regio samengevat; geen gekalibreerde kans. Regionale steekproef: kust, west en Utrecht/Flevoland. Ontbrekende modelwaarden tellen niet mee.';
+  source.textContent='Modelkansen = aandeel ensembleleden; geen gekalibreerde kans. Randstad-steekproef: kust, west en Utrecht/Flevoland. Ensemble-ophaaltijd is niet de modelruntijd. Ontbrekende waarden tellen niet mee.';
   source.style.cssText='font-size:10px;color:#5b7587';section.appendChild(source);
   const risks=root.querySelector('.ricoRiskBox');
   if(risks)risks.insertAdjacentElement('afterend',section);
   else root.appendChild(section);
-  return {available:available.map(m=>m.model),plots:charts.map(c=>c.title),dateCount:dates.length};
+  return {available:available.map(m=>m.model),plots:charts.map(c=>c.title),dateCount:dates.length,
+    fetchedAt:available.length?fetchedAt:null,
+    scanAt:Number(root.dataset.scanSavedAt)||null};
 }
 """)
                 print('Randstad-pluimen:', json.dumps(plume_info,ensure_ascii=False),flush=True)
+                if plume_info.get('scanAt') and plume_info.get('fetchedAt'):
+                    print('Modelscan versus ensemble-ophaalmeting (geen claim over run):',
+                          {'dagscan': plume_info['scanAt'], 'ensemble_opgehaald': plume_info['fetchedAt']},flush=True)
                 plume_card=forecast.locator('#ricoExportRandstadPlumes')
                 plume_png=await plume_card.screenshot(type='png',animations='disabled',timeout=20000)
                 if len(plume_png)>10000:
@@ -1152,7 +1316,7 @@ async def make_images() -> None:
 <title>Weerkaarten morgen en overmorgen</title>
 <style>body{max-width:920px;margin:20px auto;padding:0 12px;font:16px system-ui,sans-serif;background:#f2f7fb;color:#173b56}h1{font-size:24px}img{max-width:100%;height:auto;display:block;margin:20px auto;border-radius:12px}p{color:#456478}</style>
 </head><body><h1>Weerkaarten morgen en overmorgen</h1>
-<p>De kaarten worden meerdere keren per dag automatisch bijgewerkt.</p>
+<p>De kaarten worden meerdere keren per dag gecontroleerd. Bij ontbrekende actuele gegevens blijft de vorige publicatie behouden.</p>
 <img src="morgen.png" alt="Landelijke weersverwachting voor morgen">
 <img src="overmorgen.png" alt="Landelijke weersverwachting voor overmorgen">
 <h2>Randstad · 10 dagen (zelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · tien dagen (compact)</h2><img src="randstad-10dagen-compact.png" alt="Tiendaagse weersverwachting voor de Randstad"><h2>Morgenkaart met tiendaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
