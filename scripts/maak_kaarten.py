@@ -1410,31 +1410,61 @@ async def make_images() -> None:
                     const feels=finite(mx)&&mx<5&&finite(wind)&&wind>=12?13.12+0.6215*mx-11.37*Math.pow(wind,0.16)+0.3965*mx*Math.pow(wind,0.16):null;
                     return {name,feels,max:mx,min:mn,maxRange:range(pts.map(p=>p.tx)),minRange:range(pts.map(p=>p.tn)),rain,sun,wind,weather:weather(rain,sun,d.date),differences:differences.slice(0,2).join(' · '),count};
                   });
-                  const width=1000,height=800;
+                  // Dezelfde dagmodelscan, uitsluitend een betere mobiele PNG-presentatie.
+                  const weatherIcon=(w)=>{
+                    if(w==='Regenachtig')return '🌧️';
+                    if(w==='Buien of regen')return '🌦️';
+                    if(w==='Zonnig')return '☀️';
+                    if(w==='Vrij zonnig')return '🌤️';
+                    if(w==='Zon en wolken')return '⛅';
+                    if(w==='Veel bewolking')return '🌥️';
+                    if(w==='Geheel bewolkt')return '☁️';
+                    return '🌤️';
+                  };
+                  const width=1000,height=918;
                   const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
                   const c=canvas.getContext('2d');
-                  c.fillStyle='#eff7fc';c.fillRect(0,0,width,height);
-                  c.fillStyle='#0a5073';c.font='bold 38px Arial';c.fillText('Nederland · komende 5 dagen',30,51);
-                  c.fillStyle='#56778e';c.font='22px Arial';c.fillText('Landelijke modelmix · 35 scanpunten · regionale verschillen',30,84);
+                  c.fillStyle='#edf7fd';c.fillRect(0,0,width,height);
+                  c.fillStyle='#084b74';c.font='bold 40px Arial';c.fillText('🇳🇱 Nederland · komende 5 dagen',28,51);
+                  c.fillStyle='#526e84';c.font='22px Arial';c.fillText('Landelijke modelmix · 35 scanpunten · regionale verschillen',28,88);
+                  // Grote rode maxima en blauwe minima aan de rechterkant.
+                  const roundRect=(x,y,w,h,r,fill,stroke)=>{
+                    c.beginPath();c.roundRect(x,y,w,h,r);
+                    if(fill){c.fillStyle=fill;c.fill()}
+                    if(stroke){c.strokeStyle=stroke;c.lineWidth=1.6;c.stroke()}
+                  };
                   for(let i=0;i<5;i++){
-                    const d=data[i],y=105+i*128;
-                    c.fillStyle=i%2?'#ffffff':'#f8fcff';c.fillRect(20,y,960,119);
-                    c.strokeStyle='#d2e4f0';c.lineWidth=1.5;c.strokeRect(20,y,960,119);
-                    c.fillStyle='#234b65';c.font='bold 24px Arial';c.fillText(d.name,40,y+34);
-                    c.font='bold 24px Arial';c.fillText(d.weather,215,y+34);
-                    c.fillStyle='#ad3838';c.font='bold 39px Arial';c.fillText(`${r(d.max)}°`,785,y+42);
-                    c.fillStyle='#2a719d';c.font='bold 26px Arial';c.fillText(`${r(d.min)}°`,875,y+40);
-                    c.fillStyle='#426176';c.font='21px Arial';
+                    const d=data[i],y=132+i*142;
+                    roundRect(13,y,974,132,17,i%2?'#ffffff':'#f7fcff','#c9dfed');
+                    c.strokeStyle='#d4e4ed';c.lineWidth=2;
+                    c.beginPath();c.moveTo(187,y+18);c.lineTo(187,y+115);c.moveTo(823,y+18);c.lineTo(823,y+115);c.stroke();
+                    c.fillStyle='#133e5e';c.font='bold 26px Arial';c.fillText(d.name,32,y+35);
+                    c.fillStyle='#687f91';c.font='17px Arial';c.fillText(`max ${d.maxRange}`,32,y+88);
+                    c.fillText(`min ${d.minRange}`,32,y+112);
+                    c.font='52px "Noto Color Emoji","Segoe UI Emoji",sans-serif';
+                    c.fillText(weatherIcon(d.weather),207,y+67);
+                    c.fillStyle='#153e5d';c.font='bold 27px Arial';c.fillText(d.weather,291,y+35);
                     const sun=finite(d.sun)?`${r(d.sun)} u zon`:'zon onbekend';
                     const rain=finite(d.rain)?`${d.rain.toFixed(1).replace('.',',')} mm`:'neerslag onbekend';
                     const wind=finite(d.wind)?`${bft(d.wind)} Bft`:'wind onbekend';
-                    c.fillText(`${sun}  ·  ${rain}  ·  ${wind}${d.count?'  ·  '+d.count+' modellen':''}${finite(d.feels)?'  ·  voelt als '+r(d.feels)+'°':''}`,215,y+67);
-                    c.fillStyle='#174f70';c.font='bold 19px Arial';c.fillText(d.differences,270,y+101);
-                    c.fillStyle='#6b8293';c.font='17px Arial';c.fillText(`max ${d.maxRange}  ·  min ${d.minRange}`,40,y+106);
+                    c.fillStyle='#426377';c.font='20px Arial';
+                    c.fillText(`☀ ${sun}   ☂ ${rain}   ≋ ${wind}`,291,y+68);
+                    if(finite(d.feels)){
+                      c.fillStyle='#315a75';c.font='18px Arial';
+                      c.fillText(`Voelt als ${r(d.feels)}°`,690,y+68);
+                    }
+                    // Regionale verschillen zijn ruimtelijk; geen onzekerheidsmarge.
+                    c.fillStyle='#245777';c.font='bold 18px Arial';
+                    const note=d.differences.replace('Kust duidelijk meer wind','Kust meer wind').replace('Regionale verschillen beperkt','Weinig regionale verschillen');
+                    c.fillText('⌖  '+note,291,y+105,500);
+                    c.textAlign='right';
+                    c.fillStyle='#b13939';c.font='bold 47px Arial';c.fillText(`${r(d.max)}°`,960,y+61);
+                    c.fillStyle='#246c9b';c.font='bold 29px Arial';c.fillText(`${r(d.min)}°`,960,y+105);
+                    c.textAlign='left';
                   }
-                  c.fillStyle='#5b7488';c.font='18px Arial';
-                  c.fillText('Temperatuurbanden tonen verschillen tussen locaties, geen modelspreiding.',30,766);
-                  c.fillText('Dagwaarden uit dezelfde scan als Randstad; alleen beschikbare gegevens.',30,790);
+                  c.fillStyle='#5a7285';c.font='18px Arial';
+                  c.fillText('Temperatuurbanden: verschillen tussen locaties, niet tussen modellen.',27,868);
+                  c.fillText('Dagwaarden uit dezelfde actuele scan als Randstad · alleen beschikbare gegevens.',27,898);
                   return canvas.toDataURL('image/png');
                 }""", {'cacheKey':SCAN_KEY,'firstDate':compact[0]['date']})
                 if national_url and national_url.startswith('data:image/png;base64,'):
