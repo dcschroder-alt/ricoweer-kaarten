@@ -1351,6 +1351,130 @@ async def make_images() -> None:
                 raise RuntimeError('De volledige Randstad-PNG lijkt leeg.')
             (OUT/'randstad-10dagen.png').write_bytes(big_bytes)
             print(f'Randstad 10-daagse uit dezelfde scan: {len(big_bytes)} bytes, scan {regional["scanAt"]}',flush=True)
+            # Landelijke vijfdaagse als compacte introductie BOVEN de bestaande
+            # Randstad-10-daagse. Geen nieuwe API-calls: exact dezelfde, reeds
+            # gevalideerde landelijke dagscan uit lokale opslag wordt gebruikt.
+            # Nationaal zijn dit *ruimtelijke* verschillen tussen scanpunten;
+            # niet te verwarren met ensemble- of modelonzekerheid.
+            try:
+                national_url = await widget_page.evaluate(r"""({cacheKey,firstDate}) => {
+                  let pack;
+                  try { pack=JSON.parse(localStorage.getItem(cacheKey)||'null') } catch(e){return null}
+                  if(!pack||!Array.isArray(pack.days))return null;
+                  const start=new Date(firstDate+'T12:00:00Z');
+                  const dates=Array.from({length:5},(_,i)=>new Date(start.getTime()+i*86400000).toISOString().slice(0,10));
+                  const validDay=dates.map(date=>pack.days.find(d=>d.date===date));
+                  const finite=v=>typeof v==='number'&&Number.isFinite(v);
+                  if(validDay.some(d=>!d||!Array.isArray(d.pts)||d.pts.filter(p=>finite(p.tx)&&finite(p.tn)).length<12))return null;
+                  const median=a=>{const b=a.filter(finite).sort((x,y)=>x-y);return b.length?b[Math.floor((b.length-1)/2)]+(b.length%2?0:(b[Math.floor(b.length/2)]-b[Math.floor((b.length-1)/2)])/2):null};
+                  const avg=a=>{const b=a.filter(finite);return b.length?b.reduce((x,y)=>x+y,0)/b.length:null};
+                  const bft=v=>!finite(v)?'—':v<6?1:v<12?2:v<20?3:v<29?4:v<39?5:v<50?6:v<62?7:v<75?8:9;
+                  const r=n=>finite(n)?Math.round(n):'—';
+                  const coastNames=new Set(['Texel','Terschelling','Den Helder','IJmuiden','Scheveningen','Vlissingen','Schiermonnikoog','Harlingen']);
+                  const coast=p=>coastNames.has(p.point?.n);
+                  const inEast=p=>finite(p.point?.lon)&&p.point.lon>=5.4&&!coast(p);
+                  const region=(pts,fn)=>pts.filter(fn);
+                  const range=a=>{const b=a.filter(finite);return b.length?`${Math.round(Math.min(...b))}–${Math.round(Math.max(...b))}°`:'—';};
+                  const daylight=date=>{
+                    const d=new Date(date+'T12:00:00Z');const start=new Date(Date.UTC(d.getUTCFullYear(),0,0));
+                    const n=(d-start)/86400000;const dec=23.44*Math.PI/180*Math.sin(2*Math.PI*(n-81)/365);
+                    const lat=52.1*Math.PI/180;
+                    const h=Math.acos(Math.max(-1,Math.min(1,-Math.tan(lat)*Math.tan(dec))));
+                    return h*24/Math.PI;
+                  };
+                  const weather=(rain,sun,date)=>{
+                    if(finite(rain)&&rain>=8)return 'Regenachtig';
+                    if(finite(rain)&&rain>=1)return 'Buien of regen';
+                    if(!finite(sun))return finite(rain)?'Overwegend droog':'Weerbeeld beperkt';
+                    const frac=sun/Math.max(1,daylight(date));
+                    return frac>=.8?'Zonnig':frac>=.6?'Vrij zonnig':frac>=.4?'Zon en wolken':frac>.2?'Veel bewolking':'Geheel bewolkt';
+                  };
+                  const data=validDay.map((d,i)=>{
+                    const pts=d.pts.filter(p=>finite(p.tx)&&finite(p.tn));
+                    const kust=region(pts,coast),oost=region(pts,inEast),binnen=region(pts,p=>!coast(p));
+                    const mx=median(pts.map(p=>p.tx)),mn=median(pts.map(p=>p.tn));
+                    const rain=median(pts.map(p=>p.rain)),sun=median(pts.map(p=>p.sun)),wind=median(pts.map(p=>p.wind));
+                    const cMax=median(kust.map(p=>p.tx)),eMax=median(oost.map(p=>p.tx));
+                    const cMin=median(kust.map(p=>p.tn)),iMin=median(binnen.map(p=>p.tn));
+                    const cWind=median(kust.map(p=>p.wind)),iWind=median(binnen.map(p=>p.wind));
+                    const wetK=median(kust.map(p=>p.rain)),wetE=median(oost.map(p=>p.rain));
+                    const differences=[];
+                    if(finite(cMax)&&finite(eMax)&&Math.abs(cMax-eMax)>=2)differences.push(cMax>eMax?'Kust overdag zachter':'Oosten overdag warmer');
+                    if(finite(cMin)&&finite(iMin)&&cMin-iMin>=2)differences.push('Binnenland koudere nachten');
+                    if(finite(cWind)&&finite(iWind)&&cWind-iWind>=8)differences.push('Kust duidelijk meer wind');
+                    if(finite(wetK)&&finite(wetE)&&Math.abs(wetK-wetE)>=2)differences.push(wetK>wetE?'Meer neerslag aan de kust':'Oosten natter');
+                    if(pts.some(p=>finite(p.snow)&&p.snow>=.1))differences.push('Lokaal sneeuwsignaal');
+                    if(!differences.length)differences.push('Regionale verschillen beperkt');
+                    const name=new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d.date+'T12:00:00Z')).replace('.','');
+                    const count=Array.isArray(d.models)?d.models.length:null;
+                    const feels=finite(mx)&&mx<5&&finite(wind)&&wind>=12?13.12+0.6215*mx-11.37*Math.pow(wind,0.16)+0.3965*mx*Math.pow(wind,0.16):null;
+                    return {name,feels,max:mx,min:mn,maxRange:range(pts.map(p=>p.tx)),minRange:range(pts.map(p=>p.tn)),rain,sun,wind,weather:weather(rain,sun,d.date),differences:differences.slice(0,2).join(' · '),count};
+                  });
+                  const width=1000,height=800;
+                  const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
+                  const c=canvas.getContext('2d');
+                  c.fillStyle='#eff7fc';c.fillRect(0,0,width,height);
+                  c.fillStyle='#0a5073';c.font='bold 38px Arial';c.fillText('Nederland · komende 5 dagen',30,51);
+                  c.fillStyle='#56778e';c.font='22px Arial';c.fillText('Landelijke modelmix · 35 scanpunten · regionale verschillen',30,84);
+                  for(let i=0;i<5;i++){
+                    const d=data[i],y=105+i*128;
+                    c.fillStyle=i%2?'#ffffff':'#f8fcff';c.fillRect(20,y,960,119);
+                    c.strokeStyle='#d2e4f0';c.lineWidth=1.5;c.strokeRect(20,y,960,119);
+                    c.fillStyle='#234b65';c.font='bold 24px Arial';c.fillText(d.name,40,y+34);
+                    c.font='bold 24px Arial';c.fillText(d.weather,215,y+34);
+                    c.fillStyle='#ad3838';c.font='bold 39px Arial';c.fillText(`${r(d.max)}°`,785,y+42);
+                    c.fillStyle='#2a719d';c.font='bold 26px Arial';c.fillText(`${r(d.min)}°`,875,y+40);
+                    c.fillStyle='#426176';c.font='21px Arial';
+                    const sun=finite(d.sun)?`${r(d.sun)} u zon`:'zon onbekend';
+                    const rain=finite(d.rain)?`${d.rain.toFixed(1).replace('.',',')} mm`:'neerslag onbekend';
+                    const wind=finite(d.wind)?`${bft(d.wind)} Bft`:'wind onbekend';
+                    c.fillText(`${sun}  ·  ${rain}  ·  ${wind}${d.count?'  ·  '+d.count+' modellen':''}${finite(d.feels)?'  ·  voelt als '+r(d.feels)+'°':''}`,215,y+67);
+                    c.fillStyle='#174f70';c.font='bold 19px Arial';c.fillText(d.differences,270,y+101);
+                    c.fillStyle='#6b8293';c.font='17px Arial';c.fillText(`max ${d.maxRange}  ·  min ${d.minRange}`,40,y+106);
+                  }
+                  c.fillStyle='#5b7488';c.font='18px Arial';
+                  c.fillText('Temperatuurbanden tonen verschillen tussen locaties, geen modelspreiding.',30,766);
+                  c.fillText('Dagwaarden uit dezelfde scan als Randstad; alleen beschikbare gegevens.',30,790);
+                  return canvas.toDataURL('image/png');
+                }""", {'cacheKey':SCAN_KEY,'firstDate':compact[0]['date']})
+                if national_url and national_url.startswith('data:image/png;base64,'):
+                    (OUT/'nederland-5dagen.png').write_bytes(base64.b64decode(national_url.split(',',1)[1],validate=True))
+                    # Voeg de nieuwe kop toe aan BEIDE reeds bestaande WordPress-
+                    # afbeeldingsadressen. Geen aanpassing aan de widget of WP nodig.
+                    async def prepend_national(image_bytes: bytes) -> bytes:
+                        result=await widget_page.evaluate(r"""async ({topUrl,bottomUrl})=>{
+                          const images=await Promise.all([topUrl,bottomUrl].map(async src=>{
+                            const img=new Image();img.src=src;await img.decode();return img;
+                          }));
+                          const [top,bottom]=images;
+                          const canvas=document.createElement('canvas');
+                          canvas.width=bottom.naturalWidth;
+                          const h=Math.round(top.naturalHeight*canvas.width/top.naturalWidth);
+                          canvas.height=h+bottom.naturalHeight;
+                          const ctx=canvas.getContext('2d');
+                          ctx.drawImage(top,0,0,canvas.width,h);
+                          ctx.drawImage(bottom,0,h);
+                          return canvas.toDataURL('image/png');
+                        }""",{'topUrl':national_url,'bottomUrl':'data:image/png;base64,'+base64.b64encode(image_bytes).decode('ascii')})
+                        if not result.startswith('data:image/png;base64,'):
+                            raise RuntimeError('Landelijk voorblad kon niet worden samengesteld.')
+                        return base64.b64decode(result.split(',',1)[1],validate=True)
+                    # Eerst in het geheugen opbouwen; pas daarna alle drie de
+                    # PNG's overschrijven zodat er geen gedeeltelijke update is.
+                    compact_with_national=await prepend_national(compact_file.read_bytes())
+                    full_with_national=await prepend_national(big_bytes)
+                    if min(len(compact_with_national),len(full_with_national))<50000:
+                        raise RuntimeError('Landelijke vijfdaagse PNG lijkt onvolledig.')
+                    compact_file.write_bytes(compact_with_national)
+                    (OUT/'randstad-10dagen-compact.png').write_bytes(compact_with_national)
+                    (OUT/'randstad-10dagen.png').write_bytes(full_with_national)
+                    print('Landelijke 5-daagse boven de Randstad 10-daagse geplaatst (zelfde dagscan; geen extra API-calls).',flush=True)
+                else:
+                    print('Landelijke vijfdaagse niet volledig beschikbaar; bestaande Randstadverwachting ongewijzigd.',flush=True)
+            except Exception as exc:
+                # Een alleen visuele toevoeging mag geen succesvolle actuele
+                # Randstad-publicatie alsnog blokkeren.
+                print('Landelijke vijfdaagse overgeslagen; oorspronkelijke Randstad-PNG behouden:',str(exc)[:250],flush=True)
             # Een simpele startpagina is vereist voor GitHub Pages. Deze bevat
             # uitsluitend de twee publiek getoonde afbeeldingen, geen link
             # naar de Ricoweer-app, broncode, caches of model-API's.
@@ -1363,7 +1487,7 @@ async def make_images() -> None:
 <p>De kaarten worden meerdere keren per dag gecontroleerd. Bij ontbrekende actuele gegevens blijft de vorige publicatie behouden.</p>
 <img src="morgen.png" alt="Landelijke weersverwachting voor morgen">
 <img src="overmorgen.png" alt="Landelijke weersverwachting voor overmorgen">
-<h2>Randstad · 10 dagen (zelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · tien dagen (compact)</h2><img src="randstad-10dagen-compact.png" alt="Tiendaagse weersverwachting voor de Randstad"><h2>Morgenkaart met tiendaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
+<h2>Nederland 5 dagen en Randstad 10 dagen (dezelfde scan)</h2><img src="randstad-10dagen.png" alt="Tien dagen Randstad"><h2>Randstad · tien dagen (compact)</h2><img src="randstad-10dagen-compact.png" alt="Tiendaagse weersverwachting voor de Randstad"><h2>Morgenkaart met tiendaagse</h2><img src="widget.png" alt="Morgenkaart met Randstadverwachting">
 </body></html>"""
             (OUT / 'index.html').write_text(landing, encoding='utf-8')
             print("Succes: morgen.png, overmorgen.png, widget.png, randstad-5dagen.png (10 dagen, bestaande URL), randstad-10dagen-compact.png en randstad-10dagen.png zijn gecontroleerd en gereed voor publicatie.", flush=True)
