@@ -1389,31 +1389,75 @@ async def make_images() -> None:
                     const frac=sun/Math.max(1,daylight(date));
                     return frac>=.8?'Zonnig':frac>=.6?'Vrij zonnig':frac>=.4?'Zon en wolken':frac>.2?'Veel bewolking':'Geheel bewolkt';
                   };
+                  // Per scanpunt opnieuw de gewogen DAG-modelmediaan bepalen.
+                  // De modelgewichten volgen de centrale Ricoweer-dagmix; individuele
+                  // modellen tellen maar eenmaal mee. Ensemble-P50 is hier NIET per
+                  // 35 punten aanwezig en wordt daarom niet stilzwijgend verzonnen.
+                  const modelWeight=(key,lead)=>{
+                    const short={harmonie:3.2,icon_d2:3.3,arome:3.0,icon:2.5,arpege:2.2,ecmwf:1.65,gfs:1.3,aifs:1.3,gem:1.5};
+                    const mid={icon:1.55,arpege:1.35,ecmwf:1.9,gfs:1.4,aifs:1.45,gem:1.55};
+                    const long={ecmwf:1.85,gfs:1.45,aifs:1.45,arpege:1.05,icon:1.05,gem:1.55};
+                    return (lead<=2?short:lead<=4?mid:long)[key]||1;
+                  };
+                  const weightedMedian=(a)=>{
+                    const b=a.filter(x=>finite(x.v)&&finite(x.w)&&x.w>0).sort((x,y)=>x.v-y.v);
+                    if(!b.length)return null;
+                    const mid=b.reduce((s,x)=>s+x.w,0)/2;let sum=0;
+                    for(const x of b){sum+=x.w;if(sum>=mid)return x.v}return b[b.length-1].v;
+                  };
+                  const modelPoint=(p,lead)=>{
+                    const a=Array.isArray(p.modelVals)?p.modelVals:[];
+                    const unique=new Map();
+                    for(const x of a)if(x&&x.key&&!unique.has(x.key))unique.set(x.key,x);
+                    const vals=[...unique.values()];
+                    // Niet ongemerkt terugvallen op een ongewogen puntwaarde.
+                    if(vals.length<2)return null;
+                    const calc=k=>weightedMedian(vals.map(x=>({v:x[k],w:modelWeight(x.key,lead)})));
+                    return {...p,tx:calc('tx'),tn:calc('tn'),rain:median(vals.map(x=>x.rain)),sun:median(vals.map(x=>x.sun)),wind:median(vals.map(x=>x.wind)),snow:median(vals.map(x=>x.snow)),modelCount:vals.length};
+                  };
+                  // Elk gebied krijgt één stem in de nationale mediaan. De kust,
+                  // Randstad en dicht bemonsterde regio's domineren zo niet.
+                  const zone=p=>{
+                    const n=p.point?.n||'',r=p.point?.r||'',lat=p.point?.lat,lon=p.point?.lon;
+                    if(coast(p)||r==='Randstad-kust'||['Hoek van Holland','Middelburg'].includes(n))return 'Kust';
+                    if(r==='Wadden'||r==='Noord'||(finite(lat)&&lat>=52.8))return 'Noord';
+                    if(r==='Zuid'||(finite(lat)&&lat<=51.65))return 'Zuid';
+                    if(finite(lon)&&lon>=5.65)return 'Oost';
+                    return 'Midden';
+                  };
+                  const zones=['Kust','Noord','Midden','Oost','Zuid'];
+                  const regionalMedian=(pts,k)=>median(zones.map(z=>median(pts.filter(p=>zone(p)===z).map(p=>p[k]))));
                   const data=validDay.map((d,i)=>{
-                    const pts=d.pts.filter(p=>finite(p.tx)&&finite(p.tn));
-                    const kust=region(pts,coast),oost=region(pts,inEast),binnen=region(pts,p=>!coast(p));
-                    const mx=median(pts.map(p=>p.tx)),mn=median(pts.map(p=>p.tn));
-                    const rain=median(pts.map(p=>p.rain)),sun=median(pts.map(p=>p.sun)),wind=median(pts.map(p=>p.wind));
+                    const lead=Number.isFinite(d.lead)?d.lead:i;
+                    const pts=d.pts.map(p=>modelPoint(p,lead)).filter(p=>p&&finite(p.tx)&&finite(p.tn));
+                    if(pts.length<12||zones.filter(z=>pts.some(p=>zone(p)===z)).length<4)return null;
+                    const kust=region(pts,p=>zone(p)==='Kust'),oost=region(pts,p=>zone(p)==='Oost'),binnen=region(pts,p=>zone(p)!=='Kust');
+                    const mx=regionalMedian(pts,'tx'),mn=regionalMedian(pts,'tn');
+                    const rain=regionalMedian(pts,'rain'),sun=regionalMedian(pts,'sun'),wind=regionalMedian(pts,'wind');
                     const cMax=median(kust.map(p=>p.tx)),eMax=median(oost.map(p=>p.tx));
                     const cMin=median(kust.map(p=>p.tn)),iMin=median(binnen.map(p=>p.tn));
                     const cWind=median(kust.map(p=>p.wind)),iWind=median(binnen.map(p=>p.wind));
                     const wetK=median(kust.map(p=>p.rain)),wetE=median(oost.map(p=>p.rain));
+                    const localWet=pts.filter(p=>finite(p.rain)&&p.rain>=1).length;
                     const differences=[];
                     if(finite(cMax)&&finite(eMax)&&Math.abs(cMax-eMax)>=2)differences.push(cMax>eMax?'Kust overdag zachter':'Oosten overdag warmer');
                     if(finite(cMin)&&finite(iMin)&&cMin-iMin>=2)differences.push('Binnenland koudere nachten');
                     if(finite(cWind)&&finite(iWind)&&cWind-iWind>=8)differences.push('Kust duidelijk meer wind');
                     if(finite(wetK)&&finite(wetE)&&Math.abs(wetK-wetE)>=2)differences.push(wetK>wetE?'Meer neerslag aan de kust':'Oosten natter');
                     if(pts.some(p=>finite(p.snow)&&p.snow>=.1))differences.push('Lokaal sneeuwsignaal');
+                    if(localWet>=2&&finite(rain)&&rain<1)differences.push('Regionaal kans op buien');
                     if(!differences.length)differences.push('Regionale verschillen beperkt');
                     const name=new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d.date+'T12:00:00Z')).replace('.','');
-                    const count=Array.isArray(d.models)?d.models.length:null;
+                    const count=Math.round(median(pts.map(p=>p.modelCount))||0);
                     const feels=finite(mx)&&mx<5&&finite(wind)&&wind>=12?13.12+0.6215*mx-11.37*Math.pow(wind,0.16)+0.3965*mx*Math.pow(wind,0.16):null;
-                    return {name,feels,max:mx,min:mn,maxRange:range(pts.map(p=>p.tx)),minRange:range(pts.map(p=>p.tn)),rain,sun,wind,weather:weather(rain,sun,d.date),differences:differences.slice(0,2).join(' · '),count};
+                    let wx=weather(rain,sun,d.date);
+                    if(localWet>=Math.max(2,Math.ceil(pts.length*.18))&&finite(rain)&&rain<1)wx='Regionaal buien';
+                    return {name,feels,max:mx,min:mn,maxRange:range(pts.map(p=>p.tx)),minRange:range(pts.map(p=>p.tn)),rain,sun,wind,weather:wx,differences:differences.slice(0,2).join(' · '),count};
                   });
-                  // Dezelfde dagmodelscan, uitsluitend een betere mobiele PNG-presentatie.
+                  if(data.some(d=>!d))return null;
                   const weatherIcon=(w)=>{
                     if(w==='Regenachtig')return '🌧️';
-                    if(w==='Buien of regen')return '🌦️';
+                    if(w==='Buien of regen'||w==='Regionaal buien')return '🌦️';
                     if(w==='Zonnig')return '☀️';
                     if(w==='Vrij zonnig')return '🌤️';
                     if(w==='Zon en wolken')return '⛅';
@@ -1426,7 +1470,7 @@ async def make_images() -> None:
                   const c=canvas.getContext('2d');
                   c.fillStyle='#edf7fd';c.fillRect(0,0,width,height);
                   c.fillStyle='#084b74';c.font='bold 40px Arial';c.fillText('🇳🇱 Nederland · komende 5 dagen',28,51);
-                  c.fillStyle='#526e84';c.font='22px Arial';c.fillText('Landelijke modelmix · 35 scanpunten · regionale verschillen',28,88);
+                  c.fillStyle='#526e84';c.font='22px Arial';c.fillText('Gewogen dagmodelmix · 5 regio’s · regionale verschillen',28,88);
                   // Grote rode maxima en blauwe minima aan de rechterkant.
                   const roundRect=(x,y,w,h,r,fill,stroke)=>{
                     c.beginPath();c.roundRect(x,y,w,h,r);
@@ -1464,7 +1508,7 @@ async def make_images() -> None:
                   }
                   c.fillStyle='#5a7285';c.font='18px Arial';
                   c.fillText('Temperatuurbanden: verschillen tussen locaties, niet tussen modellen.',27,868);
-                  c.fillText('Dagwaarden uit dezelfde actuele scan als Randstad · alleen beschikbare gegevens.',27,898);
+                  c.fillText('Gewogen dagmodellen per punt; gelijke regio-invloed · geen extra API.',27,898);
                   return canvas.toDataURL('image/png');
                 }""", {'cacheKey':SCAN_KEY,'firstDate':compact[0]['date']})
                 if national_url and national_url.startswith('data:image/png;base64,'):
@@ -1498,7 +1542,7 @@ async def make_images() -> None:
                     compact_file.write_bytes(compact_with_national)
                     (OUT/'randstad-10dagen-compact.png').write_bytes(compact_with_national)
                     (OUT/'randstad-10dagen.png').write_bytes(full_with_national)
-                    print('Landelijke 5-daagse boven de Randstad 10-daagse geplaatst (zelfde dagscan; geen extra API-calls).',flush=True)
+                    print('Landelijke 5-daagse: gewogen dagmodellen en 5 regio-medianen, zonder extra API-verzoeken.',flush=True)
                 else:
                     print('Landelijke vijfdaagse niet volledig beschikbaar; bestaande Randstadverwachting ongewijzigd.',flush=True)
             except Exception as exc:
