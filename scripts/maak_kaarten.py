@@ -1005,14 +1005,14 @@ async def make_images() -> None:
   };
   // Only the documented three plots, based on actual members from 2–3 representative points.
   const charts=winter?[
-    {title:'❄️ Vorst- en ijsdagkans',detail:'Vorst: minimum < 0 °C · IJsdag: maximum < 0 °C',field:'tn',test:x=>x<0,otherField:'tx',otherTest:x=>x<0,kind:'dual-chance',color:'#339ddd',otherColor:'#123f79'},
+    {title:'❄️ Vorst- en ijsdagkans',detail:'Vorst: minimum < 0 °C · IJsdag: maximum < 0 °C',field:'tn',test:x=>x<0,otherField:'tx',otherTest:x=>x<0,kind:'dual-chance',color:'#238bd1',otherColor:'#123d8f'},
     {title:'🌨️ Sneeuwval en sneeuwdek',detail:'Sneeuwval ≥ 0,1 cm per dag · sneeuwdek ≥ 1 cm om 08:00 uur',
       field:'snow',test:x=>x>=.1,otherField:'snowDepth',otherTest:x=>x>=1,
-      kind:'dual-chance',color:'#5897cb',otherColor:'#174c93',
+      kind:'dual-chance',color:'#4a9dd4',otherColor:'#153d83',
       labels:['Sneeuwval (≥ 0,1 cm)','Sneeuwdek (≥ 1 cm, 08:00)']},
-    {title:'🌡️ Temperatuurpluim',detail:'Rood: dagmaximum · blauw: nachtminimum met spreiding (P20–P80) · 0° en −5° referentie',kind:'temp',color:'#c95746'}
+    {title:'🌡️ Temperatuurpluim',detail:'Dagmaximum en nachtminimum · P20–P80 · schaal in stappen van 5 °C',kind:'temp',color:'#c95746'}
   ]:[
-    {title:'🌡️ Temperatuurpluim',detail:'Rood: dagmaximum · blauw: nachtminimum met spreiding (P20–P80) · 0° en −5° referentie',kind:'temp',color:'#c95746'},
+    {title:'🌡️ Temperatuurpluim',detail:'Dagmaximum en nachtminimum · P20–P80 · schaal in stappen van 5 °C',kind:'temp',color:'#c95746'},
     {title:'🌧️ Neerslagkans',detail:'Neerslag ≥ 0,1 mm · Veel neerslag ≥ 10 mm per dag',field:'rain',test:x=>x>=.1,otherField:'rain',otherTest:x=>x>=10,kind:'dual-chance',color:'#267acb',otherColor:'#174c93',labels:['Neerslag (≥ 0,1 mm)','Veel neerslag (≥ 10 mm)']},
     {title:'☀️ Warmtekans',detail:'Dagmaximum ≥ 20 °C',field:'tx',test:x=>x>=20,kind:'chance',color:'#ef943d'}
   ];
@@ -1030,11 +1030,11 @@ async def make_images() -> None:
   const short=date=>new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric',timeZone:'UTC'})
     .format(new Date(date+'T12:00:00Z')).replace('.','');
   for(const chart of charts){
-    const card=document.createElement('div');card.style.cssText='background:#fff;border:1px solid #d7e7f2;border-radius:10px;padding:10px 6px;margin:0 0 10px';
+    const card=document.createElement('div');card.style.cssText='background:#fff;border:1px solid #d7e7f2;border-radius:10px;padding:13px 8px;margin:0 0 12px';
     const title=document.createElement('div');title.textContent=chart.title;title.style.cssText='font-weight:800;font-size:14px;margin:0 8px 2px';card.appendChild(title);
     const detail=document.createElement('div');detail.textContent=chart.detail;detail.style.cssText='font-size:11px;margin:0 8px 7px;color:#637b8d';card.appendChild(detail);
-    const svg=make('svg',{viewBox:'0 0 480 172',width:'100%',height:'auto',role:'img','aria-label':chart.title});
-    const x=i=>38+i*46, top=20,bottom=135;
+    const svg=make('svg',{viewBox:'0 0 520 228',width:'100%',height:'auto',role:'img','aria-label':chart.title});
+    const x=i=>54+i*49, top=24,bottom=187;
     let samples;
     if(chart.kind==='temp')samples=dates.map(d=>({max:tempStats(d,'tx'),min:tempStats(d,'tn')}));
     else if(chart.kind==='dual-chance')samples=dates.map(d=>({
@@ -1042,6 +1042,32 @@ async def make_images() -> None:
       ice:percentage(chart.otherField,chart.otherTest,d)
     }));
     else samples=dates.map(d=>percentage(chart.field,chart.test,d));
+    // Compact, verified chart takeaway. Missing members never count as zero.
+    const summary=document.createElement('div');
+    summary.style.cssText='margin:4px 8px 8px;padding:6px 9px;background:#e8f3fa;border-radius:7px;color:#254b68;font-size:11px;font-weight:700';
+    if(chart.kind==='dual-chance'){
+      const peaks=(key)=>samples.map((v,i)=>({v:v[key],i})).filter(o=>Number.isFinite(o.v)).sort((a,b)=>b.v-a.v)[0];
+      const a=peaks('frost'),b=peaks('ice');
+      const main=chart.otherField==='snowDepth'?'Sneeuwval':'Vorst';
+      const second=chart.otherField==='snowDepth'?'Sneeuwdek':'IJsdag';
+      const label=o=>Math.round(o.v)+'% '+short(dates[o.i]);
+      summary.textContent=a?(main+' maximaal '+label(a)+(b&&b.v>0?' · '+second+' maximaal '+label(b):'')):
+        'Geen bruikbare kansen beschikbaar';
+    }else if(chart.kind==='chance'){
+      const peak=samples.map((v,i)=>({v,i})).filter(o=>Number.isFinite(o.v)).sort((a,b)=>b.v-a.v)[0];
+      summary.textContent=peak?'Hoogste kans: '+Math.round(peak.v)+'% op '+short(dates[peak.i]):
+        'Geen bruikbare kansen beschikbaar';
+    }else{
+      const first=samples.find(v=>v.max&&v.min);
+      const last=[...samples].reverse().find(v=>v.max&&v.min);
+      if(first&&last){
+        const diff=last.max[1]-first.max[1];
+        summary.textContent=Math.abs(diff)<1.5?'Temperatuurtrend: weinig verandering':
+          (diff<0?'Temperatuurtrend: later kouder':'Temperatuurtrend: later zachter');
+        summary.textContent+=' · maximum '+Math.round(last.max[1])+'° · minimum '+Math.round(last.min[1])+'° aan het eind';
+      }else summary.textContent='Temperatuurtrend niet betrouwbaar beschikbaar';
+    }
+    card.appendChild(summary);
     if(samples.every(v=>chart.kind==='dual-chance'?(v.frost===null&&v.ice===null):chart.kind==='temp'?!v.max&&!v.min:v===null)){
       const no=document.createElement('div');no.textContent='Geen bruikbare ensemblegegevens voor deze grafiek';
       no.style.cssText='color:#687f93;font-size:12px;padding:25px 10px';card.appendChild(no);
@@ -1049,36 +1075,45 @@ async def make_images() -> None:
       let low=0,high=100;
       if(chart.kind==='temp'){
         const a=samples.flatMap(s=>[...(s.max||[]),...(s.min||[])]).filter(Number.isFinite);
-        low=Math.floor(Math.min(...a,-5)-1);high=Math.ceil(Math.max(...a,0)+1);
-        if(high-low<8)high=low+8;
+        low=5*Math.floor((Math.min(...a,-5)-1)/5);
+        high=5*Math.ceil((Math.max(...a,0)+1)/5);
+        if(high-low<15)high=low+15;
       }
       const y=v=>bottom-(v-low)/(high-low)*(bottom-top);
-      for(let i=0;i<=4;i++){
-        const v=low+(high-low)*i/4,yy=y(v);
-        if(chart.kind!=='temp'||(Math.abs(v)>1.3&&Math.abs(v+5)>1.3)){
-          svg.appendChild(make('line',{x1:38,y1:yy,x2:456,y2:yy,stroke:'#dce8f0','stroke-width':1}));
-          svg.appendChild(make('text',{x:32,y:yy+4,'font-size':10,'text-anchor':'end',fill:'#647d91'},
-            chart.kind==='temp'?Math.round(v)+'°':Math.round(v)+'%'));
-        }
-      }
-      if(chart.kind==='temp'){
-        for(const [target,color,dash] of [[0,'#174c79',null],[-5,'#7398b2','5 4']]){
-          const yy=y(target);
-          const attrs={x1:38,y1:yy,x2:456,y2:yy,stroke:color,'stroke-width':target===0?2.1:1.2};
-          if(dash)attrs['stroke-dasharray']=dash;
-          svg.appendChild(make('line',attrs));
-          svg.appendChild(make('text',{x:32,y:yy-5,'text-anchor':'end','font-size':10,'font-weight':800,fill:color},target+'°'));
-        }
+      const marks=chart.kind==='temp'?
+        Array.from({length:Math.round((high-low)/5)+1},(_,i)=>low+5*i):[0,25,50,75,100];
+      for(const v of marks){
+        const yy=y(v),zero=chart.kind==='temp'&&v===0,cold=chart.kind==='temp'&&v===-5;
+        const attrs={x1:54,y1:yy,x2:499,y2:yy,
+          stroke:zero?'#245779':cold?'#7798ae':'#cfdee8',
+          'stroke-width':zero?2.2:cold?1.55:1};
+        if(cold)attrs['stroke-dasharray']='5 4';
+        svg.appendChild(make('line',attrs));
+        svg.appendChild(make('text',{x:47,y:yy+3.5,'font-size':11,'text-anchor':'end',
+          'font-weight':(zero||cold)?800:500,
+          fill:(zero||cold)?'#204c70':'#536d82'},
+          chart.kind==='temp'?v+'°':v+'%'));
       }
       if(chart.kind==='dual-chance'){
         samples.forEach((v,i)=>{
           if(Number.isFinite(v.frost))svg.appendChild(make('rect',{
-            x:x(i)-18,y:y(v.frost),width:16,height:Math.max(0,bottom-y(v.frost)),
+            x:x(i)-18,y:y(v.frost),width:15,height:Math.max(0,bottom-y(v.frost)),
             rx:2,fill:chart.color,stroke:'#fff','stroke-width':.6}));
           if(Number.isFinite(v.ice))svg.appendChild(make('rect',{
-            x:x(i)+3,y:y(v.ice),width:16,height:Math.max(0,bottom-y(v.ice)),
+            x:x(i)+2,y:y(v.ice),width:15,height:Math.max(0,bottom-y(v.ice)),
             rx:2,fill:chart.otherColor,stroke:'#fff','stroke-width':.6}));
         });
+        // Only a handful of important labels, so the paired bars remain readable.
+        for(const [key,dx,color] of [['frost',-10,chart.color],['ice',10,chart.otherColor]]){
+          const sorted=samples.map((v,i)=>({value:v[key],i})).filter(o=>Number.isFinite(o.value)&&o.value>=5)
+            .sort((a,b)=>b.value-a.value);
+          const peak=sorted[0];
+          if(peak){
+            const yy=Math.max(12,y(peak.value)-5);
+            svg.appendChild(make('text',{x:x(peak.i)+dx,y:yy,'text-anchor':'middle',
+              'font-size':10,'font-weight':800,fill:color},Math.round(peak.value)+'%'));
+          }
+        }
       }else if(chart.kind==='chance'){
         samples.forEach((v,i)=>{if(v===null)return;
           svg.appendChild(make('rect',{x:x(i)-11,y:y(v),width:22,height:Math.max(0,bottom-y(v)),rx:3,fill:chart.color}));
@@ -1094,13 +1129,22 @@ async def make_images() -> None:
           for(const group of segments){
             const poly=group.map(o=>`${x(o.i)},${y(o.v[2])}`).join(' ')+' '+
               [...group].reverse().map(o=>`${x(o.i)},${y(o.v[0])}`).join(' ');
-            svg.appendChild(make('polygon',{points:poly,fill,'fill-opacity':'.50'}));
+            svg.appendChild(make('polygon',{points:poly,fill,'fill-opacity':'.38'}));
             svg.appendChild(make('polyline',{points:group.map(o=>`${x(o.i)},${y(o.v[1])}`).join(' '),
-              fill:'none',stroke:color,'stroke-width':2.6,'stroke-linecap':'round','stroke-linejoin':'round'}));
+              fill:'none',stroke:color,'stroke-width':3.25,'stroke-linecap':'round','stroke-linejoin':'round'}));
+          }
+        }
+        const finalIndex=samples.findLastIndex(v=>v.max&&v.min);
+        if(finalIndex>=0){
+          const end=samples[finalIndex];
+          for(const [value,color,offset] of [[end.max[1],'#b43e36',-7],[end.min[1],'#1666ab',12]]){
+            if(Number.isFinite(value))svg.appendChild(make('text',{
+              x:Math.min(501,x(finalIndex)+4),y:Math.max(12,Math.min(201,y(value)+offset)),
+              'font-size':10,'font-weight':800,'text-anchor':'end',fill:color},Math.round(value)+'°'));
           }
         }
       }
-      dates.forEach((d,i)=>svg.appendChild(make('text',{x:x(i),y:157,'font-size':9,
+      dates.forEach((d,i)=>svg.appendChild(make('text',{x:x(i),y:210,'font-size':10,
         'text-anchor':'middle',fill:'#486479'},short(d))));
       card.appendChild(svg);
       if(chart.kind==='temp'){
