@@ -3,16 +3,12 @@ name: Ricoweer - kaarten voor WordPress
 on:
   workflow_dispatch:
   schedule:
-    # Vast publicatieschema in Nederlandse tijd (CET/CEST).
-    # GitHub verwerkt zomer-/wintertijd via Europe/Amsterdam.
-    # GitHub Actions kan geplande runs vertragen of incidenteel overslaan.
-    - cron: '0 0,5,8,11,14,17,20 * * *'
-      timezone: 'Europe/Amsterdam'
-    - cron: '30 1 * * *'
+    - cron: '30 1,5,8,11,14,17,20,23 * * *'
       timezone: 'Europe/Amsterdam'
 
 permissions:
   contents: read
+  actions: read
   pages: write
   id-token: write
 
@@ -21,16 +17,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publiceer:
+  maak_kaarten:
+    name: Maak en upload kaarten
     runs-on: ubuntu-24.04
     timeout-minutes: 25
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Toon aanleiding voor de publicatie
+      - name: Toon startinformatie
         run: |
-          echo "Startwijze: ${{ github.event_name }}"
+          echo "Aanleiding: ${{ github.event_name }}"
           echo "Nederlandse tijd: $(TZ=Europe/Amsterdam date '+%Y-%m-%d %H:%M:%S %Z')"
           echo "Branch: ${{ github.ref_name }}"
       - name: Haal exportcode op
@@ -39,7 +33,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
+          cache: pip
           cache-dependency-path: requirements.txt
       - name: Installeer Playwright en Chromium
         run: |
@@ -52,12 +46,72 @@ jobs:
         env:
           SOURCE_MAP_URL: https://dcschroder-alt.github.io/Regioweer/weerkaart.html
           OUTPUT_DIR: public
+      - name: Controleer PNG-bestanden
+        run: |
+          test -s public/morgen.png
+          test -s public/overmorgen.png
+          test -s public/randstad-10dagen.png
+          test -s public/index.html
       - name: Configureer GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload de PNG's
         uses: actions/upload-pages-artifact@v4
         with:
           path: public
+
+  publiceer:
+    name: Publiceer de afbeeldingen
+    needs: maak_kaarten
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      opnieuw_nodig: ${{ steps.artifact_check.outcome == 'failure' || steps.deployment.outcome == 'failure' }}
+    steps:
+      - name: Wacht op zichtbaarheid GitHub Pages-artifact
+        id: artifact_check
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # De artifact-registratie kan na de upload vertraagd zichtbaar zijn.
+          # De aparte job voorkomt dat de upload en Pages-deploy direct op elkaar volgen.
+          sleep 25
+          for poging in 1 2 3 4 5 6 7 8; do
+            aantal=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" --jq '[.artifacts[] | select(.name=="github-pages" and .expired==false)] | length' 2>/dev/null || echo 0)
+            echo "Artifact-controle $poging: $aantal github-pages artifact(s) zichtbaar"
+            if [ "$aantal" = 1 ]; then exit 0; fi
+            if [ "$aantal" != 0 ]; then echo 'Meerdere gelijknamige artifacts: stop'; exit 1; fi
+            sleep 15
+          done
+          echo 'Artifact niet tijdig zichtbaar; laat de bestaande Pages-publicatie staan.'
+          exit 1
       - name: Publiceer de afbeeldingen
+        id: deployment
+        if: ${{ steps.artifact_check.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: Resultaat van eerste publicatiepoging
+        if: always()
+        run: |
+          echo "Artifact-controle: ${{ steps.artifact_check.outcome }}"
+          echo "Eerste Pages-poging: ${{ steps.deployment.outcome }}"
+          echo "Een eventuele mislukking wordt in de aparte hersteljob afgehandeld."
+
+  publiceer_opnieuw:
+    name: Herstelpoging Pages (zonder nieuwe weerdata)
+    needs: [maak_kaarten, publiceer]
+    if: ${{ always() && needs.maak_kaarten.result == 'success' && needs.publiceer.outputs.opnieuw_nodig == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Geef GitHub extra verwerkingstijd
+        run: sleep 75
+      - name: Publiceer hetzelfde artifact opnieuw
         id: deployment
         uses: actions/deploy-pages@v4
