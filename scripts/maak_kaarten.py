@@ -105,8 +105,9 @@ WIDGET_VALIDATED_JS = """({cacheKey, date, maxAge, minPts}) => {
  try {pack=JSON.parse(localStorage.getItem(cacheKey)||'null')} catch(e){return false}
  if(!pack||!Array.isArray(pack.models)||pack.models.length<2||!Array.isArray(pack.days))return false;
  if(Date.now()-Number(pack.savedAt||0)>maxAge)return false;
- const hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Amsterdam',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
- const start=new Date(Date.parse(date+'T12:00:00Z')+(hour>=18?0:-86400000)).toISOString().slice(0,10);
+ const hm=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Amsterdam',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date());
+ const [hour,minute]=hm.split(':').map(Number);
+ const start=new Date(Date.parse(date+'T12:00:00Z')+((hour>17||(hour===17&&minute>=30))?0:-86400000)).toISOString().slice(0,10);
  const day=pack.days.find(x=>x.date===start);
  if(!day||day.pts.filter(p=>Number.isFinite(p.tx)&&Number.isFinite(p.tn)).length<minPts)return false;
  const card=document.querySelector('#ricoLiveShell #ricoWeatherAtlas .ricoWeatherGrid > .ricoWeatherCard:first-child');
