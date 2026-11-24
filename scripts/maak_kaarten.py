@@ -1457,21 +1457,37 @@ async def make_images() -> None:
                     if(finite(wetK)&&finite(wetE)&&Math.abs(wetK-wetE)>=2)differences.push(wetK>wetE?'Meer neerslag aan de kust':'Oosten natter');
                     if(pts.some(p=>finite(p.snow)&&p.snow>=.1))differences.push('Lokaal sneeuwsignaal');
                     if(localWet>=2&&finite(rain)&&rain<1)differences.push('Regionaal kans op buien');
-                    if(!differences.length){
-                      const sortedTx=regionValues.filter(z=>finite(z.max)).sort((a,b)=>b.max-a.max);
-                      const sortedTn=regionValues.filter(z=>finite(z.min)).sort((a,b)=>a.min-b.min);
-                      if(sortedTn.length>=2&&sortedTn[0].min<sortedTn[sortedTn.length-1].min-0.5)
-                        differences.push(`Koudste nacht: ${sortedTn[0].name.toLowerCase()}`);
-                      else if(sortedTx.length>=2&&sortedTx[0].max>sortedTx[sortedTx.length-1].max+0.5)
-                        differences.push(`Warmst overdag: ${sortedTx[0].name.toLowerCase()}`);
-                      else differences.push('Regionale temperaturen dicht bij elkaar');
-                    }
+                    // Een korte inhoudelijke weersverwachting in plaats van
+                    // terugkerende labels 'Koudste nacht' of 'Weinig verschillen'.
+                    // Alleen dagelijkse modelwaarden, geen uurwaarden of verzonnen kans.
+                    const coldest=regionValues.filter(z=>finite(z.min)).sort((a,b)=>a.min-b.min);
+                    const warmest=regionValues.filter(z=>finite(z.max)).sort((a,b)=>b.max-a.max);
+                    const hasFrost=coldest.length&&coldest[0].min<0;
+                    const hasModerateFrost=coldest.length&&coldest[0].min<=-5;
+                    const frostText=hasModerateFrost?'met lokaal matige vorst':hasFrost?'met lichte vorst':'zonder vorstsignaal';
+                    const coastBreezy=finite(cWind)&&finite(iWind)&&cWind-iWind>=8;
+                    const regionalShowers=localWet>=Math.max(2,Math.ceil(pts.length*.18));
+                    const cloudy=finite(sun)&&sun/Math.max(1,daylight(d.date))<=.2;
+                    let forecast;
+                    if(finite(rain)&&rain>=8)forecast='Veel bewolking en perioden met regen.';
+                    else if(regionalShowers||finite(rain)&&rain>=1)
+                      forecast=finite(sun)&&sun/Math.max(1,daylight(d.date))>=.4
+                        ?'Zon en wolken, regionaal een bui.':'Wolkenvelden met kans op buien.';
+                    else if(cloudy)forecast=hasFrost?'Overwegend grijs; in de nacht kans op vorst.':'Veel bewolking, maar overwegend droog.';
+                    else if(finite(sun)&&sun/Math.max(1,daylight(d.date))>=.8)
+                      forecast=hasFrost?'Zonnig en droog; in de nacht lichte vorst.':'Veel zon en overwegend droog.';
+                    else if(finite(sun)&&sun/Math.max(1,daylight(d.date))>=.6)
+                      forecast=coastBreezy?'Vrij zonnig en droog; aan zee meer wind.':'Vrij zonnig met overwegend droog weer.';
+                    else if(finite(sun))forecast=hasFrost?'Af en toe zon; in de nacht lichte vorst.':'Wolken en zon, op veel plaatsen droog.';
+                    else forecast=finite(rain)?'Overwegend droog; bewolkingsbeeld onzeker.':'Weerbeeld beperkt door ontbrekende modelgegevens.';
+                    // Bij kans op matige vorst de kwalificatie in zonnige dagen bijstellen.
+                    if(hasModerateFrost&&forecast.includes('lichte vorst'))forecast=forecast.replace('lichte vorst','lokaal matige vorst');
                     const name=new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric',month:'short',timeZone:'UTC'}).format(new Date(d.date+'T12:00:00Z')).replace('.','');
                     const count=Math.round(median(pts.map(p=>p.modelCount))||0);
                     const feels=finite(mx)&&mx<5&&finite(wind)&&wind>=12?13.12+0.6215*mx-11.37*Math.pow(wind,0.16)+0.3965*mx*Math.pow(wind,0.16):null;
                     let wx=weather(rain,sun,d.date);
                     if(localWet>=Math.max(2,Math.ceil(pts.length*.18))&&finite(rain)&&rain<1)wx='Regionaal buien';
-                    return {name,feels,max:mx,min:mn,maxRange:range(pts.map(p=>p.tx)),minRange:range(pts.map(p=>p.tn)),rain,sun,wind,weather:wx,differences:differences.slice(0,2).join(' · '),count,regionValues};
+                    return {name,feels,max:mx,min:mn,maxRange:range(pts.map(p=>p.tx)),minRange:range(pts.map(p=>p.tn)),rain,sun,wind,weather:wx,forecast,count,regionValues};
                   });
                   if(data.some(d=>!d))return null;
                   const weatherIcon=(w)=>{
@@ -1484,7 +1500,7 @@ async def make_images() -> None:
                     if(w==='Geheel bewolkt')return '☁️';
                     return '🌤️';
                   };
-                  const width=1000,height=1190;
+                  const width=1000,height=1300;
                   const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
                   const c=canvas.getContext('2d');
                   c.fillStyle='#edf7fd';c.fillRect(0,0,width,height);
@@ -1499,8 +1515,8 @@ async def make_images() -> None:
                   // regionale maxima/minima naast elkaar, zodat het overzicht
                   // niet een verkorte kopie van de Randstadverwachting is.
                   for(let i=0;i<5;i++){
-                    const d=data[i],y=112+i*206;
-                    roundRect(13,y,974,196,17,i%2?'#ffffff':'#f7fcff','#c9dfed');
+                    const d=data[i],y=112+i*226;
+                    roundRect(13,y,974,216,17,i%2?'#ffffff':'#f7fcff','#c9dfed');
                     c.strokeStyle='#d4e4ed';c.lineWidth=2;
                     c.beginPath();c.moveTo(183,y+15);c.lineTo(183,y+118);c.moveTo(822,y+15);c.lineTo(822,y+118);c.stroke();
                     c.fillStyle='#133e5e';c.font='bold 26px Arial';c.fillText(d.name,30,y+35);
@@ -1518,25 +1534,25 @@ async def make_images() -> None:
                       c.fillStyle='#315a75';c.font='18px Arial';
                       c.fillText(`Voelt als ${r(d.feels)}°`,689,y+66);
                     }
-                    c.fillStyle='#245777';c.font='bold 18px Arial';
-                    c.fillText('⌖  '+d.differences,288,y+104,508);
+                    c.fillStyle='#245777';c.font='bold 21px Arial';
+                    c.fillText('•  '+d.forecast,288,y+109,514);
                     c.textAlign='right';
                     c.fillStyle='#b13939';c.font='bold 47px Arial';c.fillText(`${r(d.max)}°`,961,y+60);
                     c.fillStyle='#246c9b';c.font='bold 29px Arial';c.fillText(`${r(d.min)}°`,961,y+103);
                     c.textAlign='left';
                     // Vijf vaste regionale tegels, elk met eigen maximum en minimum.
                     // Ontbrekende landsdelen krijgen een streep, nooit een verzonnen waarde.
-                    const x0=26,cellW=189,regionY=y+126;
+                    const x0=26,cellW=189,regionY=y+138;
                     for(let j=0;j<5;j++){
                       const z=d.regionValues[j],x=x0+j*cellW;
-                      roundRect(x,regionY,179,59,9,j%2?'#e8f2f9':'#e2f0fa','#d0e2ee');
-                      c.fillStyle='#315b77';c.font='bold 16px Arial';c.fillText(z.name,x+9,regionY+20);
-                      c.fillStyle='#b13939';c.font='bold 23px Arial';c.fillText(finite(z.max)?`${r(z.max)}°`:'—',x+9,regionY+47);
-                      c.fillStyle='#246c9b';c.fillText(finite(z.min)?`${r(z.min)}°`:'—',x+93,regionY+47);
+                      roundRect(x,regionY,179,65,9,j%2?'#e8f2f9':'#e2f0fa','#d0e2ee');
+                      c.fillStyle='#315b77';c.font='bold 19px Arial';c.fillText(z.name,x+10,regionY+24);
+                      c.fillStyle='#b13939';c.font='bold 29px Arial';c.fillText(finite(z.max)?`${r(z.max)}°`:'—',x+10,regionY+55);
+                      c.fillStyle='#246c9b';c.fillText(finite(z.min)?`${r(z.min)}°`:'—',x+94,regionY+55);
                     }
                   }
                   c.fillStyle='#526e84';c.font='17px Arial';
-                  c.fillText('Rood: dagmaximum · blauw: nachtminimum · elke regio telt even zwaar mee.',27,1163);
+                  c.fillText('Rood: dagmaximum · blauw: nachtminimum · elke regio telt even zwaar mee.',27,1275);
                   return canvas.toDataURL('image/png');
                 }""", {'cacheKey':SCAN_KEY,'firstDate':compact[0]['date']})
                 if national_url and national_url.startswith('data:image/png;base64,'):
