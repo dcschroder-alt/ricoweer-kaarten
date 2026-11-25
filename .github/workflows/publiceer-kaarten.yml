@@ -41,11 +41,24 @@ jobs:
           python -m playwright install chromium
       - name: Controleer exporter
         run: python -m py_compile scripts/maak_kaarten.py
+      - name: Hergebruik recente gevalideerde modelscan
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/rico_national_scan.json
+          key: ricoweer-dagscan-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ricoweer-dagscan-v1-
       - name: Genereer kaarten met de Ricoweer-dagmodelmix
         run: python scripts/maak_kaarten.py
         env:
           SOURCE_MAP_URL: https://dcschroder-alt.github.io/Regioweer/weerkaart.html
           OUTPUT_DIR: public
+      - name: Bewaar gevalideerde modelscan voor volgende run
+        if: ${{ always() && hashFiles('.cache/rico_national_scan.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/rico_national_scan.json
+          key: ricoweer-dagscan-v1-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Controleer PNG-bestanden
         run: |
           test -s public/morgen.png
