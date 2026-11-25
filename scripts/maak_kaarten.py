@@ -1018,17 +1018,20 @@ async def make_images() -> None:
     }).filter(Boolean);
     return stats.length?stats[0].map((_,i)=>stats.reduce((s,a)=>s+a[i],0)/stats.length):null;
   };
-  // Only the documented three plots, based on actual members from 2–3 representative points.
+  // All plots reuse the already downloaded member series; no extra API calls.
   const charts=winter?[
     {title:'❄️ Vorst- en ijsdagkans',detail:'Vorst: minimum < 0 °C · IJsdag: maximum < 0 °C',field:'tn',test:x=>x<0,otherField:'tx',otherTest:x=>x<0,kind:'dual-chance',color:'#238bd1',otherColor:'#123d8f'},
     {title:'🌨️ Sneeuwval en sneeuwdek',detail:'Sneeuwval ≥ 0,1 cm per dag · sneeuwdek ≥ 1 cm om 08:00 uur',
       field:'snow',test:x=>x>=.1,otherField:'snowDepth',otherTest:x=>x>=1,
       kind:'dual-chance',color:'#4a9dd4',otherColor:'#153d83',
       labels:['Sneeuwval (≥ 0,1 cm)','Sneeuwdek (≥ 1 cm, 08:00)']},
-    {title:'🌡️ Temperatuurpluim',detail:'Dagmaximum en nachtminimum · P20–P80 · schaal in stappen van 5 °C',kind:'temp',color:'#c95746'}
+    {title:'🌡️ Temperatuurpluim',detail:'Dagmaximum en nachtminimum · P20–P80 · schaal in stappen van 5 °C',kind:'temp',color:'#c95746'},
+    {title:'🌧️ Neerslagpluim',detail:'Neerslag per dag in mm · mediaan (P50) en spreiding P20–P80',kind:'rain-plume',color:'#267acb'},
+    {title:'🌧️ Neerslagkans',detail:'Kans op minstens 1, 3 of 10 mm per dag · aandeel ensembleleden',kind:'rain-chance'}
   ]:[
     {title:'🌡️ Temperatuurpluim',detail:'Dagmaximum en nachtminimum · P20–P80 · schaal in stappen van 5 °C',kind:'temp',color:'#c95746'},
-    {title:'🌧️ Neerslagkans',detail:'Neerslag ≥ 0,1 mm · Veel neerslag ≥ 10 mm per dag',field:'rain',test:x=>x>=.1,otherField:'rain',otherTest:x=>x>=10,kind:'dual-chance',color:'#267acb',otherColor:'#174c93',labels:['Neerslag (≥ 0,1 mm)','Veel neerslag (≥ 10 mm)']},
+    {title:'🌧️ Neerslagpluim',detail:'Neerslag per dag in mm · mediaan (P50) en spreiding P20–P80',kind:'rain-plume',color:'#267acb'},
+    {title:'🌧️ Neerslagkans',detail:'Kans op minstens 1, 3 of 10 mm per dag · aandeel ensembleleden',kind:'rain-chance'},
     {title:'☀️ Warmtekans',detail:'Dagmaximum ≥ 20 °C',field:'tx',test:x=>x>=20,kind:'chance',color:'#ef943d'}
   ];
   const ns='http://www.w3.org/2000/svg';
@@ -1052,6 +1055,8 @@ async def make_images() -> None:
     const x=i=>54+i*49, top=24,bottom=187;
     let samples;
     if(chart.kind==='temp')samples=dates.map(d=>({max:tempStats(d,'tx'),min:tempStats(d,'tn')}));
+    else if(chart.kind==='rain-plume')samples=dates.map(d=>tempStats(d,'rain'));
+    else if(chart.kind==='rain-chance')samples=dates.map(d=>[1,3,10].map(limit=>percentage('rain',x=>x>=limit,d)));
     else if(chart.kind==='dual-chance')samples=dates.map(d=>({
       frost:percentage(chart.field,chart.test,d),
       ice:percentage(chart.otherField,chart.otherTest,d)
@@ -1072,6 +1077,16 @@ async def make_images() -> None:
       const peak=samples.map((v,i)=>({v,i})).filter(o=>Number.isFinite(o.v)).sort((a,b)=>b.v-a.v)[0];
       summary.textContent=peak?'Hoogste kans: '+Math.round(peak.v)+'% op '+short(dates[peak.i]):
         'Geen bruikbare kansen beschikbaar';
+    }else if(chart.kind==='rain-chance'){
+      const peak=samples.map((v,i)=>({i,v:v[0]})).filter(o=>Number.isFinite(o.v)).sort((a,b)=>b.v-a.v)[0];
+      summary.textContent=peak?'Hoogste kans op minstens 1 mm: '+Math.round(peak.v)+'% op '+short(dates[peak.i]):'Neerslagkansen niet beschikbaar';
+    }else if(chart.kind==='rain-plume'){
+      const wet=samples.map((v,i)=>({v,i})).filter(o=>o.v&&Number.isFinite(o.v[1]));
+      const peak=[...wet].sort((a,b)=>b.v[1]-a.v[1])[0];
+      const formatMm=v=>(v<1?v.toFixed(1):v.toFixed(1)).replace('.',',');
+      summary.textContent=peak&&peak.v[1]>=.1?
+        'Natste dag volgens de mediaan: '+short(dates[peak.i])+' · '+formatMm(peak.v[1])+' mm (P20–P80: '+formatMm(peak.v[0])+'–'+formatMm(peak.v[2])+' mm)':
+        wet.length?'Mediaan blijft onder 0,1 mm per dag; afzonderlijke leden kunnen wel neerslag berekenen':'Neerslaghoeveelheden niet beschikbaar';
     }else{
       const first=samples.find(v=>v.max&&v.min);
       const last=[...samples].reverse().find(v=>v.max&&v.min);
@@ -1083,11 +1098,19 @@ async def make_images() -> None:
       }else summary.textContent='Temperatuurtrend niet betrouwbaar beschikbaar';
     }
     card.appendChild(summary);
-    if(samples.every(v=>chart.kind==='dual-chance'?(v.frost===null&&v.ice===null):chart.kind==='temp'?!v.max&&!v.min:v===null)){
+    if(samples.every(v=>chart.kind==='dual-chance'?(v.frost===null&&v.ice===null):chart.kind==='temp'?!v.max&&!v.min:chart.kind==='rain-plume'?!v:chart.kind==='rain-chance'?v.every(x=>!Number.isFinite(x)):v===null)){
       const no=document.createElement('div');no.textContent='Geen bruikbare ensemblegegevens voor deze grafiek';
       no.style.cssText='color:#687f93;font-size:12px;padding:25px 10px';card.appendChild(no);
     }else{
       let low=0,high=100;
+      if(chart.kind==='rain-plume'){
+        const a=samples.flatMap(v=>v||[]).filter(Number.isFinite);
+        low=0;
+        const peak=Math.max(0,...a);
+        // Stable human-readable rain axis, including very small amounts.
+        const steps=[.5,1,2,5,10,20,30,50,75,100,150,200];
+        high=steps.find(v=>v>=peak*1.15)||Math.ceil(peak/50)*50+50;
+      }
       if(chart.kind==='temp'){
         const a=samples.flatMap(s=>[...(s.max||[]),...(s.min||[])]).filter(Number.isFinite);
         low=5*Math.floor((Math.min(...a,-5)-1)/5);
@@ -1096,7 +1119,8 @@ async def make_images() -> None:
       }
       const y=v=>bottom-(v-low)/(high-low)*(bottom-top);
       const marks=chart.kind==='temp'?
-        Array.from({length:Math.round((high-low)/5)+1},(_,i)=>low+5*i):[0,25,50,75,100];
+        Array.from({length:Math.round((high-low)/5)+1},(_,i)=>low+5*i):
+        chart.kind==='rain-plume'?Array.from({length:5},(_,i)=>high*i/4):[0,25,50,75,100];
       for(const v of marks){
         const yy=y(v),zero=chart.kind==='temp'&&v===0,cold=chart.kind==='temp'&&v===-5;
         const attrs={x1:54,y1:yy,x2:499,y2:yy,
@@ -1107,7 +1131,7 @@ async def make_images() -> None:
         svg.appendChild(make('text',{x:47,y:yy+3.5,'font-size':11,'text-anchor':'end',
           'font-weight':(zero||cold)?800:500,
           fill:(zero||cold)?'#204c70':'#536d82'},
-          chart.kind==='temp'?v+'°':v+'%'));
+          chart.kind==='temp'?v+'°':chart.kind==='rain-plume'?((v<1?v.toFixed(2):v.toFixed(1)).replace(/\.?0+$/,'').replace('.',',')+' mm'):v+'%'));
       }
       if(chart.kind==='dual-chance'){
         samples.forEach((v,i)=>{
@@ -1129,10 +1153,43 @@ async def make_images() -> None:
               'font-size':10,'font-weight':800,fill:color},Math.round(peak.value)+'%'));
           }
         }
+      }else if(chart.kind==='rain-chance'){
+        // Thresholds are nested probabilities, not additive risks.
+        // Stack disjoint probability portions so the bar height equals P(>=1 mm).
+        samples.forEach((values,i)=>{
+          const [p1,p3,p10]=values;
+          if(![p1,p3,p10].every(Number.isFinite))return;
+          const stack=[[Math.max(0,p1-p3),'#188bd0'],[Math.max(0,p3-p10),'#174c93'],[p10,'#f4b42f']];
+          let base=0;
+          for(const [amount,color] of stack){
+            const upper=Math.min(100,base+amount);
+            svg.appendChild(make('rect',{x:x(i)-12,y:y(upper),width:24,
+              height:Math.max(0,y(base)-y(upper)),fill:color,rx:amount===0?0:1}));
+            base=upper;
+          }
+        });
       }else if(chart.kind==='chance'){
         samples.forEach((v,i)=>{if(v===null)return;
           svg.appendChild(make('rect',{x:x(i)-11,y:y(v),width:22,height:Math.max(0,bottom-y(v)),rx:3,fill:chart.color}));
         });
+      }else if(chart.kind==='rain-plume'){
+        // Daily amounts: P20-P80 range and a separate P50 median line.
+        // Do not interpolate missing days and never treat missing values as zero.
+        samples.forEach((v,i)=>{
+          if(!v||!v.every(Number.isFinite))return;
+          const bx=x(i)-12, yTop=y(v[2]), yBottom=y(v[0]);
+          svg.appendChild(make('rect',{x:bx,y:yTop,width:24,height:Math.max(0,yBottom-yTop),
+            rx:3,fill:'#8fc4ed','fill-opacity':'.65'}));
+          svg.appendChild(make('line',{x1:bx,y1:y(v[1]),x2:bx+24,y2:y(v[1]),
+            stroke:'#1766a5','stroke-width':3,'stroke-linecap':'round'}));
+        });
+        let group=[];const groups=[];
+        samples.forEach((v,i)=>{if(v&&Number.isFinite(v[1]))group.push({i,v});
+          else if(group.length){groups.push(group);group=[];}});
+        if(group.length)groups.push(group);
+        for(const g of groups)svg.appendChild(make('polyline',{
+          points:g.map(o=>`${x(o.i)},${y(o.v[1])}`).join(' '),
+          stroke:'#1766a5','stroke-width':2.2,fill:'none','stroke-linejoin':'round'}));
       }else{
         // Draw daily maxima and minima independently, without joining gaps.
         for(const [field,color,fill] of [['max','#c95746','#f5c9b9'],['min','#2476b7','#bddcf3']]){
@@ -1162,6 +1219,24 @@ async def make_images() -> None:
       dates.forEach((d,i)=>svg.appendChild(make('text',{x:x(i),y:210,'font-size':10,
         'text-anchor':'middle',fill:'#486479'},short(d))));
       card.appendChild(svg);
+      if(chart.kind==='rain-chance'){
+        const key=document.createElement('div');
+        key.style.cssText='display:flex;gap:13px;flex-wrap:wrap;padding:2px 9px 5px;font-size:11px;color:#34536d';
+        for(const [label,color] of [['≥ 1 mm','#188bd0'],['≥ 3 mm','#174c93'],['≥ 10 mm','#f4b42f']]){
+          const item=document.createElement('span');item.textContent='■ '+label;item.style.color=color;key.appendChild(item);
+        }
+        card.appendChild(key);
+        const detail=document.createElement('div');detail.textContent='Gestapelde delen tonen de exclusieve neerslagklassen; de totale staaf is de kans op minstens 1 mm.';
+        detail.style.cssText='font-size:10px;padding:0 9px 5px;color:#5b7587';card.appendChild(detail);
+      }
+      if(chart.kind==='rain-plume'){
+        const key=document.createElement('div');
+        key.style.cssText='display:flex;gap:13px;flex-wrap:wrap;padding:2px 9px 5px;font-size:11px;color:#34536d';
+        const band=document.createElement('span');band.textContent='■ P20–P80-band';
+        band.style.color='#5c9dce';key.appendChild(band);
+        const med=document.createElement('span');med.textContent='━ Mediaan P50';
+        med.style.color='#1766a5';key.appendChild(med);card.appendChild(key);
+      }
       if(chart.kind==='temp'){
         const key=document.createElement('div');key.style.cssText='display:flex;gap:14px;flex-wrap:wrap;padding:2px 9px 5px;font-size:11px;color:#34536d';
         for(const [label,color] of [['Dagmaximum','#c95746'],['Nachtminimum','#2476b7']]){
@@ -1215,7 +1290,7 @@ async def make_images() -> None:
     section.appendChild(card);
   }
   const source=document.createElement('div');
-  source.textContent='Modelkansen = aandeel ensembleleden; geen gekalibreerde kans. Randstad-steekproef: kust, west en Utrecht/Flevoland. Ensemble-ophaaltijd is niet de modelruntijd. Ontbrekende waarden tellen niet mee.';
+  source.textContent='Neerslagpluim: dagelijkse ensemblehoeveelheden (mm) met P20–P80 en P50; modelkwantielen per bron, daarna gemiddeld over beschikbare bronnen. Neerslagkans: drempels ≥ 1, 3 en 10 mm/dag, gestapeld zonder dubbeltelling. Modelkansen = aandeel ensembleleden; geen gekalibreerde kans. Randstad-steekproef: kust, west en Utrecht/Flevoland. Ensemble-ophaaltijd is niet de modelruntijd. Ontbrekende waarden tellen niet mee.';
   source.style.cssText='font-size:10px;color:#5b7587';section.appendChild(source);
   const risks=root.querySelector('.ricoRiskBox');
   if(risks)risks.insertAdjacentElement('afterend',section);
