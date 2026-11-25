@@ -737,7 +737,7 @@ async def make_images() -> None:
                 const tx=measure('tx'),rain=measure('rain'),wind=measure('wind'),gust=measure('gust');
                 const n=tx.length,ts=spread(tx),rs=spread(rain),ws=spread(wind),gs=spread(gust);
                 if(n<2 || rain.length<2 || wind.length<2){
-                  status.textContent='🎯 Modeldekking beperkt · onvoldoende vergelijkbare modellen';
+                  status.textContent='🎯 Modelovereenstemming niet te bepalen · '+n+' temperatuurmodellen beschikbaar';
                   status.dataset.level='redelijk';
                   corrected++;continue;
                 }
@@ -746,16 +746,17 @@ async def make_images() -> None:
                 if(rs>4)reasons.push('neerslag');
                 if(ws>18)reasons.push('wind');
                 if(gs!==null&&gs>25&&!reasons.includes('wind'))reasons.push('windstoten');
-                const high=n>=4 && rain.length>=3 && wind.length>=3 && ts<=2.5 && rs<=4 && ws<=18 && lead<5;
-                const low=ts>5||rs>12||ws>30||(lead>=7&&ts>3.5);
-                const label=high?'hoog':low?'beperkt':'redelijk';
-                const reason=n<4?'weinig modellen ('+n+')':reasons.length?
-                  'vooral '+reasons.slice(0,2).join(' en ')+' onzeker':
-                  lead>=5?'verder vooruit, grotere onzekerheid':'modellen liggen dicht bij elkaar';
-                status.textContent='🎯 Zekerheid '+label+' · '+reason;
-                status.dataset.level=high?'hoog':low?'laag':'redelijk';
+                // Overeenstemming is de modelspreiding; beschikbaarheid is een
+                // apart gegeven. Een klein aantal modellen leidt niet vanzelf
+                // tot 'lage overeenstemming' of 'hoge zekerheid'.
+                const agreementLow=ts>5||rs>12||ws>30||(lead>=7&&ts>3.5);
+                const agreementGood=ts<=2.5&&rs<=4&&ws<=18;
+                const label=agreementLow?'laag':agreementGood?'goed':'redelijk';
+                const reason=reasons.length?' · spreiding vooral in '+reasons.slice(0,2).join(' en '):'';
+                status.textContent='🎯 Modelovereenstemming '+label+' · '+n+' modellen beschikbaar'+reason;
+                status.dataset.level=agreementLow?'laag':agreementGood?'hoog':'redelijk';
                 status.title=n+' temperatuurmodellen, '+rain.length+' neerslagmodellen, '+wind.length+
-                  ' windmodellen. Indicatie op basis van spreiding en dekking, geen gekalibreerde kans.';
+                  ' windmodellen. Ensemblebeschikbaarheid staat los van deze deterministische modelvergelijking.';
                 corrected++;
               }
               let count=0;
@@ -1073,13 +1074,20 @@ async def make_images() -> None:
       const label=o=>Math.round(o.v)+'% '+short(dates[o.i]);
       summary.textContent=a?(main+' maximaal '+label(a)+(b&&b.v>0?' · '+second+' maximaal '+label(b):'')):
         'Geen bruikbare kansen beschikbaar';
+      if(chart.otherField!=='snowDepth'&&a){
+        const strong=samples.filter(v=>Number.isFinite(v.frost)&&v.frost>=70).length;
+        const lowLater=samples.slice(5).filter(v=>Number.isFinite(v.frost)&&v.frost<30).length;
+        if(strong>=2)summary.textContent+=' · meerdere nachten grote vorstkans';
+        if(lowLater>=3)summary.textContent+=' · later afnemende vorstkans';
+        if(b&&b.v<10)summary.textContent+=' · ijsdagkans klein';
+      }
     }else if(chart.kind==='chance'){
       const peak=samples.map((v,i)=>({v,i})).filter(o=>Number.isFinite(o.v)).sort((a,b)=>b.v-a.v)[0];
       summary.textContent=peak?'Hoogste kans: '+Math.round(peak.v)+'% op '+short(dates[peak.i]):
         'Geen bruikbare kansen beschikbaar';
     }else if(chart.kind==='rain-chance'){
       const peak=samples.map((v,i)=>({i,v:v[0]})).filter(o=>Number.isFinite(o.v)).sort((a,b)=>b.v-a.v)[0];
-      summary.textContent=peak?'Hoogste kans op minstens 1 mm: '+Math.round(peak.v)+'% op '+short(dates[peak.i]):'Neerslagkansen niet beschikbaar';
+      summary.textContent=peak?'Kans op ≥ 1 mm: maximaal '+Math.round(peak.v)+'% op '+short(dates[peak.i]):'Neerslagkansen niet beschikbaar';
     }else if(chart.kind==='rain-plume'){
       const wet=samples.map((v,i)=>({v,i})).filter(o=>o.v&&Number.isFinite(o.v[1]));
       const peak=[...wet].sort((a,b)=>b.v[1]-a.v[1])[0];
@@ -1095,9 +1103,32 @@ async def make_images() -> None:
         summary.textContent=Math.abs(diff)<1.5?'Temperatuurtrend: weinig verandering':
           (diff<0?'Temperatuurtrend: later kouder':'Temperatuurtrend: later zachter');
         summary.textContent+=' · maximum '+Math.round(last.max[1])+'° · minimum '+Math.round(last.min[1])+'° aan het eind';
+        const widths=samples.map(v=>v.max&&Number.isFinite(v.max[2])&&Number.isFinite(v.max[0])?v.max[2]-v.max[0]:null);
+        const startWidth=widths.slice(0,3).filter(Number.isFinite);
+        const endWidth=widths.slice(-3).filter(Number.isFinite);
+        if(startWidth.length>=2&&endWidth.length>=2){
+          const avg=a=>a.reduce((s,x)=>s+x,0)/a.length;
+          if(avg(endWidth)-avg(startWidth)>=1.5)summary.textContent+=' · onzekerheid neemt later toe';
+          else if(avg(startWidth)-avg(endWidth)>=1.5)summary.textContent+=' · ensembleleden liggen later dichter bij elkaar';
+        }
       }else summary.textContent='Temperatuurtrend niet betrouwbaar beschikbaar';
     }
     card.appendChild(summary);
+    // Bij zeer kleine sneeuwkansen is een lege grafiek weinig informatief.
+    // Toon de percentages wel, maar bespaar hoogte. Ontbrekende kansen blijven
+    // onbeschikbaar en worden nooit als 0% behandeld.
+    const snowSamples=chart.kind==='dual-chance'&&chart.otherField==='snowDepth';
+    const snowKnown=snowSamples?samples.flatMap(v=>[v.frost,v.ice]).filter(Number.isFinite):[];
+    const compactSnow=snowSamples&&snowKnown.length>=dates.length&&
+      Math.max(...snowKnown)<15;
+    if(compactSnow){
+      const note=document.createElement('div');
+      note.textContent='Sneeuwkans zeer klein; de volledige grafiek verschijnt vanaf 15% kans op sneeuw of sneeuwdek.';
+      note.style.cssText='font-size:11px;color:#446782;padding:5px 9px 9px';
+      card.appendChild(note);
+      section.appendChild(card);
+      continue;
+    }
     if(samples.every(v=>chart.kind==='dual-chance'?(v.frost===null&&v.ice===null):chart.kind==='temp'?!v.max&&!v.min:chart.kind==='rain-plume'?!v:chart.kind==='rain-chance'?v.every(x=>!Number.isFinite(x)):v===null)){
       const no=document.createElement('div');no.textContent='Geen bruikbare ensemblegegevens voor deze grafiek';
       no.style.cssText='color:#687f93;font-size:12px;padding:25px 10px';card.appendChild(no);
@@ -1182,6 +1213,17 @@ async def make_images() -> None:
             rx:3,fill:'#8fc4ed','fill-opacity':'.65'}));
           svg.appendChild(make('line',{x1:bx,y1:y(v[1]),x2:bx+24,y2:y(v[1]),
             stroke:'#1766a5','stroke-width':3,'stroke-linecap':'round'}));
+          if(v[1]>=.5){
+            svg.appendChild(make('text',{x:x(i),y:Math.max(12,y(v[2])-5),
+              'font-size':10,'text-anchor':'middle','font-weight':700,fill:'#195b8b'},
+              'P50 '+v[1].toFixed(1).replace('.',',')));
+          }
+          // 'Droog' alleen als de gehele weergegeven P20–P80-band nul is.
+          // Bij P50=0 met P80>0 kunnen leden nog neerslag voorzien.
+          if(v[2]<.05){
+            svg.appendChild(make('text',{x:x(i),y:bottom-5,
+              'font-size':9,'text-anchor':'middle',fill:'#617e91'},'droog'));
+          }
         });
         let group=[];const groups=[];
         samples.forEach((v,i)=>{if(v&&Number.isFinite(v[1]))group.push({i,v});
@@ -1222,11 +1264,11 @@ async def make_images() -> None:
       if(chart.kind==='rain-chance'){
         const key=document.createElement('div');
         key.style.cssText='display:flex;gap:13px;flex-wrap:wrap;padding:2px 9px 5px;font-size:11px;color:#34536d';
-        for(const [label,color] of [['≥ 1 mm','#188bd0'],['≥ 3 mm','#174c93'],['≥ 10 mm','#f4b42f']]){
+        for(const [label,color] of [['1–<3 mm','#188bd0'],['3–<10 mm','#174c93'],['≥ 10 mm','#f4b42f']]){
           const item=document.createElement('span');item.textContent='■ '+label;item.style.color=color;key.appendChild(item);
         }
         card.appendChild(key);
-        const detail=document.createElement('div');detail.textContent='Gestapelde delen tonen de exclusieve neerslagklassen; de totale staaf is de kans op minstens 1 mm.';
+        const detail=document.createElement('div');detail.textContent='De kleuren vormen elkaar uitsluitende klassen. De totale staafhoogte is de kans op ≥ 1 mm; geen dubbeltelling.';
         detail.style.cssText='font-size:10px;padding:0 9px 5px;color:#5b7587';card.appendChild(detail);
       }
       if(chart.kind==='rain-plume'){
@@ -1580,6 +1622,31 @@ async def make_images() -> None:
                     return {name,feels,max:mx,min:mn,maxRange:range(pts.map(p=>p.tx)),minRange:range(pts.map(p=>p.tn)),rain,sun,wind,weather:wx,forecast,count,regionValues};
                   });
                   if(data.some(d=>!d))return null;
+                  // Dagwaarden sturen de verhaallijn: vergelijk opeenvolgende
+                  // dagen, benoem omslag en extreme regionale minima/maxima.
+                  // Nooit uurwaarden samenvoegen tot dagwaarden.
+                  for(let i=0;i<data.length;i++){
+                    const d=data[i],prev=i?data[i-1]:null,next=i+1<data.length?data[i+1]:null;
+                    const coldRegion=d.regionValues.filter(z=>finite(z.min)).sort((a,b)=>a.min-b.min)[0];
+                    const nearIce=d.regionValues.some(z=>finite(z.max)&&z.max<.5);
+                    const dryDay=finite(d.rain)&&d.rain<.5;
+                    if(prev&&finite(prev.rain)&&finite(d.rain)&&prev.rain<.5&&d.rain>=1){
+                      d.forecast=d.rain>=3?'Omslag: meer bewolking en perioden met regen.':'Omslag: meer bewolking en kans op buien.';
+                    }else if(prev&&finite(prev.max)&&finite(d.max)&&d.max-prev.max>=3){
+                      d.forecast=dryDay?'Zachter dan gisteren; het blijft overwegend droog.':'Zachter dan gisteren; kans op regen of buien.';
+                    }else if(prev&&finite(prev.max)&&finite(d.max)&&prev.max-d.max>=3){
+                      d.forecast='Duidelijk kouder dan gisteren. '+(dryDay?'Overwegend droog.':'Kans op buien.');
+                    }else if(nearIce&&dryDay&&finite(d.sun)&&d.sun>=3){
+                      d.forecast='Zonnige perioden, regionaal rond het vriespunt.';
+                    }else if(coldRegion&&coldRegion.min<=-5&&dryDay){
+                      d.forecast='Overwegend droog; lokaal matige vorst in de nacht.';
+                    }else if(prev&&next&&finite(d.max)&&d.max<=prev.max-1&&d.max<=next.max-1){
+                      d.forecast='De koudste dag van deze periode; '+(dryDay?'meestal droog.':'met buienkans.');
+                    }else if(prev&&d.weather===prev.weather&&d.forecast===prev.forecast){
+                      if(/Zonnig|Vrij zonnig/.test(d.weather))d.forecast='Opnieuw veel zon; '+(coldRegion&&coldRegion.min<0?'landinwaarts nachtvorst.':'overwegend droog.');
+                      else if(/bewolkt/i.test(d.weather))d.forecast='Weinig zon; '+(dryDay?'het blijft grotendeels droog.':'regionaal neerslag.');
+                    }
+                  }
                   const weatherIcon=(w)=>{
                     if(w==='Regenachtig')return '🌧️';
                     if(w==='Buien of regen'||w==='Regionaal buien')return '🌦️';
