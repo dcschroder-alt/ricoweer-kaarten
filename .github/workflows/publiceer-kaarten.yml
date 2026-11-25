@@ -2,8 +2,10 @@ name: Ricoweer - kaarten voor WordPress
 
 on:
   workflow_dispatch:
+  # Niet op minuut 00: GitHub kan runs op het hele uur overslaan.
+  # Bij opslaan op main wordt de schedule opnieuw geregistreerd.
   schedule:
-    - cron: '0 1,5,6,8,9,12,16,17,18,20 * * *'
+    - cron: '7 1,5,6,8,9,12,16,17,18,20 * * *'
       timezone: 'Europe/Amsterdam'
 
 permissions:
@@ -54,7 +56,7 @@ jobs:
           SOURCE_MAP_URL: https://dcschroder-alt.github.io/Regioweer/weerkaart.html
           OUTPUT_DIR: public
       - name: Bewaar gevalideerde modelscan voor volgende run
-        if: ${{ always() && hashFiles('.cache/rico_national_scan.json') != '' }}
+        if: ${{ success() && hashFiles('.cache/rico_national_scan.json') != '' }}
         uses: actions/cache/save@v4
         with:
           path: .cache/rico_national_scan.json
