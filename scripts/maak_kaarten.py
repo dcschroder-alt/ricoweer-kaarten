@@ -1051,11 +1051,11 @@ async def make_images() -> None:
       kind:'dual-chance',color:'#4a9dd4',otherColor:'#153d83',
       labels:['Sneeuwval (≥ 0,1 cm)','Sneeuwdek (≥ 1 cm, 08:00)']},
     {title:'🌡️ Temperatuurpluim',detail:'Dagmaximum en nachtminimum · P20–P80 · schaal in stappen van 5 °C',kind:'temp',color:'#c95746'},
-    {title:'🌧️ Neerslagpluim',detail:'Neerslag per dag in mm · mediaan (P50) en spreiding P20–P80',kind:'rain-plume',color:'#267acb'},
+    {title:'🌧️ Neerslagverwachting',detail:'Verwachte neerslag per dag (mediaan) · mm',kind:'rain-plume',color:'#1766a5'},
     {title:'🌧️ Neerslagkans',detail:'Kans op minstens 1, 3 of 10 mm per dag · aandeel ensembleleden',kind:'rain-chance'}
   ]:[
     {title:'🌡️ Temperatuurpluim',detail:'Dagmaximum en nachtminimum · P20–P80 · schaal in stappen van 5 °C',kind:'temp',color:'#c95746'},
-    {title:'🌧️ Neerslagpluim',detail:'Neerslag per dag in mm · mediaan (P50) en spreiding P20–P80',kind:'rain-plume',color:'#267acb'},
+    {title:'🌧️ Neerslagverwachting',detail:'Verwachte neerslag per dag (mediaan) · mm',kind:'rain-plume',color:'#1766a5'},
     {title:'🌧️ Neerslagkans',detail:'Kans op minstens 1, 3 of 10 mm per dag · aandeel ensembleleden',kind:'rain-chance'},
     {title:'☀️ Warmtekans',detail:'Dagmaximum ≥ 20 °C',field:'tx',test:x=>x>=20,kind:'chance',color:'#ef943d'}
   ];
@@ -1159,12 +1159,12 @@ async def make_images() -> None:
     }else{
       let low=0,high=100;
       if(chart.kind==='rain-plume'){
-        const a=samples.flatMap(v=>v||[]).filter(Number.isFinite);
+        // De staafhoogte volgt de mediaan, niet het veel hogere P80-scenario.
+        const a=samples.filter(v=>v&&Number.isFinite(v[1])).map(v=>v[1]);
         low=0;
         const peak=Math.max(0,...a);
-        // Stable human-readable rain axis, including very small amounts.
         const steps=[.5,1,2,5,10,20,30,50,75,100,150,200];
-        high=steps.find(v=>v>=peak*1.15)||Math.ceil(peak/50)*50+50;
+        high=steps.find(v=>v>=peak*1.2)||Math.ceil(peak/50)*50+50;
       }
       if(chart.kind==='temp'){
         const a=samples.flatMap(s=>[...(s.max||[]),...(s.min||[])]).filter(Number.isFinite);
@@ -1228,34 +1228,26 @@ async def make_images() -> None:
           svg.appendChild(make('rect',{x:x(i)-11,y:y(v),width:22,height:Math.max(0,bottom-y(v)),rx:3,fill:chart.color}));
         });
       }else if(chart.kind==='rain-plume'){
-        // Daily amounts: P20-P80 range and a separate P50 median line.
-        // Do not interpolate missing days and never treat missing values as zero.
+        // Een duidelijke staaf per dag: P50 bepaalt de hoogte.
+        // P20–P80 blijft beschikbaar als tekst bij de natste dagen;
+        // nulmediaan wordt nooit automatisch gelijkgesteld aan zeker droog.
         samples.forEach((v,i)=>{
           if(!v||!v.every(Number.isFinite))return;
-          const bx=x(i)-12, yTop=y(v[2]), yBottom=y(v[0]);
-          svg.appendChild(make('rect',{x:bx,y:yTop,width:24,height:Math.max(0,yBottom-yTop),
-            rx:3,fill:'#8fc4ed','fill-opacity':'.65'}));
-          svg.appendChild(make('line',{x1:bx,y1:y(v[1]),x2:bx+24,y2:y(v[1]),
-            stroke:'#1766a5','stroke-width':3,'stroke-linecap':'round'}));
-          if(v[1]>=.5){
-            svg.appendChild(make('text',{x:x(i),y:Math.max(12,y(v[2])-5),
-              'font-size':10,'text-anchor':'middle','font-weight':700,fill:'#195b8b'},
-              'P50 '+v[1].toFixed(1).replace('.',',')));
+          const median=v[1],barW=24;
+          if(median>=.05){
+            const h=Math.max(2,bottom-y(median));
+            svg.appendChild(make('rect',{x:x(i)-barW/2,y:bottom-h,
+              width:barW,height:h,rx:3,fill:'#1766a5'}));
           }
-          // 'Droog' alleen als de gehele weergegeven P20–P80-band nul is.
-          // Bij P50=0 met P80>0 kunnen leden nog neerslag voorzien.
-          if(v[2]<.05){
-            svg.appendChild(make('text',{x:x(i),y:bottom-5,
+          if(median>=.5){
+            svg.appendChild(make('text',{x:x(i),y:Math.max(13,y(median)-7),
+              'font-size':10,'text-anchor':'middle','font-weight':800,fill:'#174a78'},
+              median.toFixed(1).replace('.',',')+' mm'));
+          }else if(v[2]<.05){
+            svg.appendChild(make('text',{x:x(i),y:bottom-6,
               'font-size':9,'text-anchor':'middle',fill:'#617e91'},'droog'));
           }
         });
-        let group=[];const groups=[];
-        samples.forEach((v,i)=>{if(v&&Number.isFinite(v[1]))group.push({i,v});
-          else if(group.length){groups.push(group);group=[];}});
-        if(group.length)groups.push(group);
-        for(const g of groups)svg.appendChild(make('polyline',{
-          points:g.map(o=>`${x(o.i)},${y(o.v[1])}`).join(' '),
-          stroke:'#1766a5','stroke-width':2.2,fill:'none','stroke-linejoin':'round'}));
       }else{
         // Draw daily maxima and minima independently, without joining gaps.
         for(const [field,color,fill] of [['max','#c95746','#f5c9b9'],['min','#2476b7','#bddcf3']]){
@@ -1298,10 +1290,21 @@ async def make_images() -> None:
       if(chart.kind==='rain-plume'){
         const key=document.createElement('div');
         key.style.cssText='display:flex;gap:13px;flex-wrap:wrap;padding:2px 9px 5px;font-size:11px;color:#34536d';
-        const band=document.createElement('span');band.textContent='■ P20–P80-band';
-        band.style.color='#5c9dce';key.appendChild(band);
-        const med=document.createElement('span');med.textContent='━ Mediaan P50';
+        const med=document.createElement('span');med.textContent='■ Verwachte hoeveelheid (mediaan P50)';
         med.style.color='#1766a5';key.appendChild(med);card.appendChild(key);
+        const wet=samples.map((v,i)=>({v,i})).filter(o=>o.v&&o.v.every(Number.isFinite)&&o.v[1]>=.5)
+          .sort((a,b)=>b.v[1]-a.v[1]).slice(0,2);
+        if(wet.length){
+          const range=document.createElement('div');
+          const fmt=n=>n.toFixed(1).replace('.',',');
+          range.textContent='Spreiding natste dagen (P20–P80): '+wet.map(o=>
+            short(dates[o.i])+' '+fmt(o.v[0])+'–'+fmt(o.v[2])+' mm').join(' · ');
+          range.style.cssText='font-size:10px;padding:2px 9px 5px;color:#526f83';
+          card.appendChild(range);
+        }
+        const help=document.createElement('div');
+        help.textContent='Een mediaan van 0 mm betekent niet dat neerslag uitgesloten is; zie de neerslagkansen hieronder.';
+        help.style.cssText='font-size:10px;padding:0 9px 5px;color:#526f83';card.appendChild(help);
       }
       if(chart.kind==='temp'){
         const key=document.createElement('div');key.style.cssText='display:flex;gap:14px;flex-wrap:wrap;padding:2px 9px 5px;font-size:11px;color:#34536d';
@@ -1356,7 +1359,7 @@ async def make_images() -> None:
     section.appendChild(card);
   }
   const source=document.createElement('div');
-  source.textContent='Neerslagpluim: dagelijkse ensemblehoeveelheden (mm) met P20–P80 en P50; modelkwantielen per bron, daarna gemiddeld over beschikbare bronnen. Neerslagkans: drempels ≥ 1, 3 en 10 mm/dag, gestapeld zonder dubbeltelling. Modelkansen = aandeel ensembleleden; geen gekalibreerde kans. Randstad-steekproef: kust, west en Utrecht/Flevoland. Ensemble-ophaaltijd is niet de modelruntijd. Ontbrekende waarden tellen niet mee.';
+  source.textContent='Neerslagverwachting: dagelijkse ensemblemediaan P50 (mm) als staven; P20–P80 als aanvullende spreiding voor natste dagen; modelkwantielen per bron, daarna gemiddeld over beschikbare bronnen. Neerslagkans: drempels ≥ 1, 3 en 10 mm/dag, gestapeld zonder dubbeltelling. Modelkansen = aandeel ensembleleden; geen gekalibreerde kans. Randstad-steekproef: kust, west en Utrecht/Flevoland. Ensemble-ophaaltijd is niet de modelruntijd. Ontbrekende waarden tellen niet mee.';
   source.style.cssText='font-size:10px;color:#5b7587';section.appendChild(source);
   const risks=root.querySelector('.ricoRiskBox');
   if(risks)risks.insertAdjacentElement('afterend',section);
