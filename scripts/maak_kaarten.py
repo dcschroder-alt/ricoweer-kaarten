@@ -521,9 +521,16 @@ async def make_images() -> None:
   const tempDiff=laterAvg-firstAvg;
   const coldestIndex=rows.slice(0,5).reduce((best,r,i,arr)=>r.max<arr[best].max?i:best,0);
   const warmestIndex=rows.slice(0,5).reduce((best,r,i,arr)=>r.max>arr[best].max?i:best,0);
-  const earlyMin=rows.slice(0,5).filter(r=>Number.isFinite(r.min));
+  // De TN op de actuele kalenderdag is doorgaans de afgelopen nacht.
+  // Pas bij een toekomstige datum mag deze als komende nacht worden aangeduid.
+  const nlToday=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Amsterdam',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const pastOrCurrent=rows.filter(r=>r.date===nlToday);
+  const futureEarly=rows.slice(0,5).filter(r=>r.date>nlToday);
+  const earlyMin=futureEarly.filter(r=>Number.isFinite(r.min));
   const coldestNight=earlyMin.length?Math.min(...earlyMin.map(r=>r.min)):null;
   const frostEarly=earlyMin.filter(r=>r.min<0).length;
+  const pastFrost=pastOrCurrent.some(r=>Number.isFinite(r.min)&&r.min<0);
+
   const dryStart=rows.slice(0,5).filter(dry).length>=3;
   const change=rows.findIndex((r,i)=>i>=2&&i<=6&&wetScore(r)>0&&rows.slice(0,i).filter(dry).length>=Math.min(3,i));
   const rainChange=change>=2?change:-1;
@@ -542,13 +549,16 @@ async def make_images() -> None:
   }else{
     p2='De dagen daarna wisselen wolkenvelden en drogere perioden elkaar af.';
   }
-  // Nachtvorst is een relevant kenmerk, maar tel nooit dag-6–10-minima bij de
-  // eerste dagen op en herhaal niet twee keer dezelfde vorstzin.
+  // Dagminima zijn geen gekalibreerde kansen. Geen toekomstige vorst afleiden
+  // uit de al verstreken nacht en bij geringe informatie terughoudend formuleren.
   if(coldestNight!==null&&coldestNight<0){
-    if(coldestNight<=-5)p2+=` In de koudste nacht is matige vorst mogelijk, rond ${Math.round(coldestNight)} graden.`;
-    else if(frostEarly>=2)p2+=` Landinwaarts vriest het in meerdere nachten licht, plaatselijk tot ongeveer ${Math.round(coldestNight)} graden.`;
-    else p2+=' In een enkele nacht kan het licht vriezen.';
+    if(coldestNight<=-5)p2+=` In een komende nacht is lokaal matige vorst mogelijk, met minima rond ${Math.round(coldestNight)} graden.`;
+    else if(frostEarly>=2)p2+=` In enkele komende nachten wijzen de dagverwachtingen op lichte vorst, plaatselijk rond ${Math.round(coldestNight)} graden.`;
+    else p2+=' In een van de komende nachten is plaatselijk lichte vorst mogelijk.';
+  }else if(pastFrost&&earlyMin.length>=2&&earlyMin.every(r=>r.min>=0)){
+    p2+=' Afgelopen nacht vroor het nog; voor de eerstvolgende nachten geven de dagverwachtingen geen vorst aan.';
   }
+
   const transitionIndex=rainChange>=2&&rainChange<=4?rainChange-2:-1;
   if(rainChange>=2&&rainChange<=4){
     const r=rows[rainChange],prev=rows[rainChange-1];
@@ -581,8 +591,8 @@ async def make_images() -> None:
     p3+=` De maxima liggen ${tempRange(later)}.`;
   }
   p3+=' De verwachting voor deze termijn is nog onzeker.';
-  const laterFrost=later.filter(r=>Number.isFinite(r.min)&&r.min<0).length;
-  if(laterFrost>=2&&frostEarly===0)p3+=' Ook nachtvorst is mogelijk.';
+  const laterFrost=later.filter(r=>r.date>nlToday&&Number.isFinite(r.min)&&r.min<0).length;
+  if(laterFrost>=2&&frostEarly===0)p3+=' Verder vooruit is volgens de dagmodellen opnieuw enige kans op nachtvorst; dit is nog onzeker.';
   const weatherLater=p3;
   // De overbodige zonnigste/natste-dagregels maken plaats voor drie Randstadpluimen.
   el.querySelector('.rico5DaySummary')?.remove();
